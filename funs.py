@@ -1,5 +1,6 @@
 #import packages
 import os
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -27,8 +28,18 @@ warnings.simplefilter(action='ignore', category=RuntimeWarning)
 3.시가총액 상위 N개 종목
 4.모멘텀 팩터가 가장 높은 상위 N개 종목
 '''
-
 # 상장된지 1년된 종목만 필터링
+
+def save_pickle(data, filepath):
+    with open(filepath, 'wb') as f:
+        pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
+
+def load_pickle(filepath):
+    with open(filepath, 'rb') as f:
+        data = pickle.load(f)
+
+    return data
+
 def filterByDate(price_df, code_list:list, window:int=52):
     '''
     상장된지 1년된 종목만 필터링
@@ -129,6 +140,23 @@ def calculateMomentum(price_df, LT_window:int=52, ST_window:int=4):
 
     return momentum_df
 
+def calculateBP(price_df: pd.DataFrame, bv_df: pd.DataFrame) -> pd.DataFrame:
+    '''
+    Book Value to Price 계산
+    :param price_df: 주가(weekly) 데이터
+    :param bv_df: BPS(weekly TTM-Lagging) 데이터
+    :return:
+    '''
+    #unify base date
+    startdate = max(price_df.index[0], bv_df.index[0])
+    enddate = min(price_df.index[-1], bv_df.index[-1])
+    price_df = price_df[(price_df.index >= startdate) & (price_df.index <= enddate)]
+    bv_df = bv_df[(bv_df.index >= startdate) & (bv_df.index <= enddate)]
+
+    bp_df = bv_df / price_df
+
+    return bp_df
+
 def calculateLowVol(price_df, return_window:int=1, std_window:int=52):
     '''
     저변동성 팩터(52w) 계산
@@ -142,6 +170,42 @@ def calculateLowVol(price_df, return_window:int=1, std_window:int=52):
     lowVol_df = -price_df.pct_change(return_window).rolling(std_window).std()
 
     return lowVol_df
+
+def calculateOP(eps, bps):
+    '''
+    Operating Profitability 계산
+    OP = (매출총액 − 매출원가 − 판매비와 관리비 − 비영업 이자비용) / 장부가치
+    :param eps: EPS 데이터
+    :param bps: BPS 데이터
+    :return: EPS/BPS
+    '''
+    #set na if bps is negative
+    bps_positive = bps.mask(bps <= 0, np.nan)
+
+    return eps / bps_positive
+
+def calculateInv(ta):
+    '''
+    Investment 계산
+    Inv = 당년 회계말 자산총계 / 전년 회계말 자산총계− 1
+    :param ta: 자산총계 데이터
+    :return: Inv
+    '''
+    #1년 전 데이터로 나누기
+    ta_mask = ta.mask(ta <= 0, np.nan)
+    inv = ta_mask / ta_mask.shift(52) - 1
+
+    return inv.dropna(axis=0, how='all')
+
+def getBeta(y, *x):
+    # argument *x to array
+    X = np.array(x)
+    X = X[:,:,-1]
+    y = np.array(y)
+    y = y.reshape(-1, 1)
+    X = np.vstack([np.ones(len(y)), X]).T
+
+    return np.ravel(np.linalg.inv(X.T @ X) @ X.T @ y)
 
 def calcCoeff(data):
     y = data[0]
@@ -176,8 +240,32 @@ def calculateFSCoeff(price_bd, forsh_bd, window:int=52):
 
     return coeff
 
+def calculateFSSlope(price_bd, forsh_bd, window:int=52):
+    '''
+    외국인 지분 비중 계산
+    :param price_df: 가격 데이터
+    :param foreign_df: 외국인 지분 데이터
+    :param window: 외국인 지분 비중 계산 기간
+    :return:
+    '''
 
-def filterByFactor(factor_df, code_list:list, top_n=200):
+    price_pct = price_bd.pct_change()
+    price_temp = price_pct[price_bd.index >= forsh_bd.index[0]].copy()
+    forsh_pct = forsh_bd.pct_change()
+    forsh_temp = forsh_pct.copy()
+
+    price_vol = price_pct.rolling(52).std()[price_bd.index >= forsh_bd.index[0]]
+    forsh_vol = forsh_pct.rolling(52).std()
+    rel_vol = forsh_vol / price_vol
+
+    price_roll = (price_temp + 1).rolling(window).apply(np.prod, raw=True)
+    forsh_roll = (forsh_temp + 1).rolling(window).apply(np.prod, raw=True) * rel_vol
+
+    result = forsh_roll - price_roll
+
+    return result
+
+def filterByFactor(factor_df, code_list:list, top_n=200, short:bool=False):
     '''
     팩터가 가장 높은 상위 N개 종목
     :param factor_df: 팩터 데이터(반드시 높을수록 좋도록 설정)
@@ -185,7 +273,7 @@ def filterByFactor(factor_df, code_list:list, top_n=200):
     :param top_n: 상위 N개 종목
     :return:
     '''
-    factor_df = factor_df[code_list]
+    factor_df = factor_df[code_list].dropna()
 
     if type(top_n) == list:
         # if top_n is int, calculate top and bottom
@@ -199,16 +287,25 @@ def filterByFactor(factor_df, code_list:list, top_n=200):
         else:
             raise ValueError('element of top_n(top, bottom) must be int or float')
 
-        filtered_df = factor_df[(factor_df.rank(ascending=False) >= top)&(factor_df.rank(ascending=False) <= bottom)].dropna()
+        if short: # if short is True, calculate for short
+            filtered_df = factor_df[(factor_df.rank(ascending=True) >= top)&(factor_df.rank(ascending=True) <= bottom)].dropna()
+        else:
+            filtered_df = factor_df[(factor_df.rank(ascending=False) >= top)&(factor_df.rank(ascending=False) <= bottom)].dropna()
 
     elif type(top_n) == int:
         if top_n == -1:
             filtered_df = factor_df.dropna()
         else:
-            filtered_df = factor_df[factor_df.rank(ascending=False) <= top_n].dropna()
+            if short: # if short is True, calculate for short
+                filtered_df = factor_df[factor_df.rank(ascending=True) <= top_n].dropna()
+            else:
+                filtered_df = factor_df[factor_df.rank(ascending=False) <= top_n].dropna()
     elif type(top_n) == float:
         top_n = int(top_n * len(factor_df))
-        filtered_df = factor_df[factor_df.rank(ascending=False) <= top_n].dropna()
+        if short: # if short is True, calculate for short
+            filtered_df = factor_df[factor_df.rank(ascending=True) <= top_n].dropna()
+        else:
+            filtered_df = factor_df[factor_df.rank(ascending=False) <= top_n].dropna()
     else:
         raise ValueError('top_n must be int or float or list')
 
@@ -226,7 +323,7 @@ def weightEqual(code_list:list, mktval_df):
 
     return weight
 
-def weightMarktValue(code_list:list, mktval_df):
+def weightMarketValue(code_list:list, mktval_df):
     '''
     시가총액 가중 포트폴리오의 비중 계산
     :param code_list: 종목코드
@@ -278,3 +375,17 @@ def limitWeight(weight, limit:float=0.3):
     weight_df = pd.concat(result, axis=1)
 
     return weight_df
+
+def findBaseDate(*args: pd.DataFrame):
+    '''
+    find index of all data to max lower bound
+    :param args: dataframes
+    :return: datetime index
+    '''
+    # 최대 시
+    max_date = args[0].index[0]
+    for data in args:
+        if data.index[0] > max_date:
+            max_date = data.index[0]
+
+    return max_date

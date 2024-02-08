@@ -27,17 +27,16 @@ def run_bt(weight_path):
 
     securities = [bt.CouponPayingSecurity(name, fixed_income=False) for name in weight.columns.values]
     s = bt.Strategy(weight_info[0]
-                    , [bt.algos.LimitWeights(0.2)
-                        , bt.algos.WeighTarget(weight)
+                    , [bt.algos.WeighTarget(weight)
                         , bt.algos.Rebalance()
-
                        ]
-                    , children=securities)
+                    , children=securities
+                    )
 
     t = bt.Backtest(s, price_bt
                     , integer_positions=False
                     #, initial_capital=100000000000# 매우 큰값으로 설정. 결과값에는 영향이 없으나, 단주/ 커미션 부족 등의 에러 방지
-                    , commissions=lambda q, p: abs(q) * p * 0.00215
+                    #, commissions=lambda q, p: abs(q) * p * 0.00215
                     , additional_data={'coupons': div_bt}
                     , progress_bar=True
                     ,
@@ -60,7 +59,7 @@ def get_result_csv(result):
 # C:\Users\NHWM\anaconda3\envs\Factor_Research\Lib\site-packages\ffn\core.py
 # change TRADING_DAYS_PER_YEAR => 52 # default value was 252
 
-country = 'korea' #'us' or 'korea'
+country = 'europe' #'us' or 'korea' or 'japan' or 'europe'
 rebal_freq = 'm'
 
 '''load data'''
@@ -83,9 +82,9 @@ if __name__ == "__main__":
     res = bt.run(*bt_list)
     #res.set_date_range(start='2012-01-01')
 
-    res.prices.to_csv(f'./output/{country}/price_leader_LowVol_{rebal_freq}.csv')
+    res.prices.to_csv(f'./output/{country}/price_bm_{rebal_freq}.csv')
     res_text = get_result_csv(res)
-    with open(f'./output/{country}/result_leader_LowVol_{rebal_freq}.csv', 'w') as out:
+    with open(f'./output/{country}/result_bm_{rebal_freq}.csv', 'w') as out:
         out.write(res_text)
     print('\n\n')
     res.display()
@@ -94,8 +93,7 @@ if __name__ == "__main__":
     #    res.prices[col].to_csv(f'./output/{country}/{col}.csv')
     #res.display()
     #plt.show()
-    qs.reports.html(res.prices['FScoeff+mktval'], res.prices['bm+mktval']
-                    , output=f'./output/{country}/output_mktval.html')
-    qs.reports.html(res.prices['FScoeff+equal'], res.prices['bm+mktval'],
-                    output=f'./output/{country}/output_equal.html')
+    #qs.reports.html(res.prices['FScoeff1+equal'], res.prices['bm+mktval']
+    #                , output=f'./output/{country}/FScoeff1.html')
+
     print('done')
