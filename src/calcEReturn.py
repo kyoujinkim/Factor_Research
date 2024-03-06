@@ -2,27 +2,32 @@ import itertools
 
 import numpy as np
 import pandas as pd
+from pandas._libs.tslibs.offsets import MonthEnd
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 #import plt
 import matplotlib.pyplot as plt
-from funs import *
+from src.funs import *
 
 class Calculator:
     '''
     계산기 클래스
     '''
 
-    def __init__(self, price:pd.DataFrame, halt: pd.DataFrame, rf: pd.DataFrame=None, bm: pd.DataFrame=None):
+    def __init__(self, price:pd.DataFrame, halt: pd.DataFrame=None, rf: pd.DataFrame=None, bm: pd.DataFrame=None):
         self.price_bd = price
-        self.halt_bd = halt
+        if halt is None:
+            self.halt_bd = pd.DataFrame(0, index=price.index, columns=price.columns)
+        else:
+            self.halt_bd = halt
         if rf is None:
             #set rf as 0 if not given
             self.rf_bd = pd.DataFrame(0, index=halt.index)
         else:
-            self.rf_bd = rf.fillna(method='ffill') / 100 #since rf is given as percentage
+            # since rf is given as percentage
+            self.rf_bd = rf.fillna(method='ffill') / 100
         if bm is None:
-            self.bm_bd = pd.DataFrame(1, index=halt.index)
+            self.bm_bd = pd.DataFrame(np.ones(len(self.halt_bd.index)), index=self.halt_bd.index, columns=['bm'])
         else:
             self.bm_bd = bm.fillna(method='ffill')
 
@@ -70,9 +75,7 @@ class Calculator:
         method, bday, basewindow, window, i = var
 
         temp_price = self.price.iloc[i - (basewindow + 1):i]
-        halt = (self.halt_bd[(self.halt_bd.index <= temp_price.index[-1]) & (
-                    self.halt_bd.index >= temp_price.index[-window])]
-                .dropna(axis=1).sum())
+        halt = self.halt_bd[self.halt_bd.index <= temp_price.index[-1]][-window:].dropna(axis=1).sum()
         halt = halt[halt == 0]
         temp_price = temp_price[halt.index]
         temp_rf = self.rf.iloc[i - (basewindow + 1):i]
@@ -89,8 +92,7 @@ class Calculator:
         try: temp_inv = self.inv.iloc[i - (basewindow + 1):i]
         except: temp_inv = None
 
-        return [temp_price.index[-1]
-            , self.calc_exp_rtn(method=method
+        result = self.calc_exp_rtn(method=method
                                 , bday=bday
                                 , window=window
                                 , price=temp_price
@@ -102,35 +104,48 @@ class Calculator:
                                 , op=temp_op
                                 , inv=temp_inv
                                 )
-                ]
-
-    def evaluate(self, data:list):
-
-        result = []
-        for d in tqdm(data, desc='evaluating'):
-            msfe = self._eval('msfe', d[1]['actual'], d[1]['prediction'])
-            ic = self._eval('ic', d[1]['actual'], d[1]['prediction'])
-            rankic = self._eval('rankic', d[1]['actual'], d[1]['prediction'])
-            ir = self._eval('ir', d[1]['actual'], d[1]['prediction'])
-
-            result.append([d[0], msfe, ic, rankic, ir])
+        result.name = temp_price.index[-1]
 
         return result
 
-    def _eval(self, method: str, actual, pred):
+    def evaluate(self, data:list, window:int=1, resample:str='M', **kwargs) -> pd.DataFrame:
         '''
         예측값과 실제값 간 Loss 계산
-        :param method: 'msfe: Mean Squared Forecast Error'
-        :param actual: actual return
-        :param pred: predicted return
-        :return: loss value
+        :param data: list of prediction series
+        :param window: average window for evaluation
+        :param resample: resampling frequency
+        :param kwargs: additional arguments
+        /corr_method: 'pearson' or 'spearman' for IC and RankIC
+        :return: dataframe
         '''
-        if method == 'msfe':
-            return self._msfe(actual, pred)
-        elif method == 'ic':
-            return self._ic(actual, pred)
-        elif method == 'ir':
-            return self._ir(actual, pred)
+        corr_method = kwargs.get('corr_method', None)
+
+        if resample=='M':
+            bday = 12
+        elif resample=='W':
+            bday = 52
+
+        rtn = self.price_bd.resample('M').last().pct_change().dropna(how='all', axis=0)
+        rf = self.rf_bd.resample('M').last()
+
+        result = []
+        for d in tqdm(data, desc='evaluating'):
+            d = -d
+            date = d.name + MonthEnd(1)
+            date_f = d.name + MonthEnd(window)
+
+            monthly_rf = (1+rf.loc[date:date_f]).mean()**(1/bday)-1
+            a = rtn[d.index].loc[date:date_f].mean() - monthly_rf.values
+
+            msfe = self._msfe(a, d)
+            ic = self._corr(a, d, method=corr_method)
+            rankic = self._rankcorr(a, d, method=corr_method)
+            ir = self._ir(a, d)
+
+            result.append([d.name, msfe, ic, rankic, ir])
+
+        result_df = pd.DataFrame(result, columns=['Index', 'MSFE', 'IC', 'Rank_IC', 'IR']).set_index('Index')
+        return result_df
 
     def calc_exp_rtn(self, method: str, bday:int, window:int
                      , price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame
@@ -167,9 +182,8 @@ class Calculator:
             exp_rtn = self._ff5(price, rf, bm, hml, smb, op, inv, window, bday)
 
         exp_rtn = exp_rtn[exp_rtn != 0].dropna()
-        actual = (price.pct_change(periods=1, fill_method=None).iloc[-1][exp_rtn.index]
-                  - ((1+rf.iloc[-1])**(1/bday)-1).values)
-        return {'prediction': exp_rtn, 'actual': actual}
+
+        return exp_rtn
 
     def _historic_mean(self, price:pd.DataFrame, rf:pd.DataFrame, window:int, bday:int):
         '''
@@ -177,9 +191,9 @@ class Calculator:
         :param periods: 과거 수익률 평균을 계산할 기간
         :return: dataframe of expected return
         '''
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
-        rf = (1+rf).iloc[-(window + 1):-1]**(1/bday)-1
-        return (rtn - rf.values).mean(axis=0)
+        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rf = (1+rf).iloc[-window:]**(1/bday)-1
+        return (rtn - rf.values)[-self.avg_window:].mean(axis=0)
 
     def _capm(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, window:int, bday:int):
         '''
@@ -188,24 +202,26 @@ class Calculator:
         :return: dataframe of expected return
         '''
         # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
-        rf = (1+rf).iloc[-(window + 1):-1]**(1/bday)-1
+        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rf = (1+rf).iloc[-window:]**(1/bday)-1
         rtn_pure = rtn - rf.values
 
         # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_bm_pure = rtn_bm - rf.values
 
-        # 3. beta 계산
-        cov = pd.concat([rtn_pure, rtn_bm_pure], axis=1).cov()
-        diag = np.diag(cov)
-        beta = cov.iloc[-1, :-1] / diag[1:]
+        # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
+        # 4. multivariate beta 계산
+        betas = []
+        for col in rtn_pure:
+            beta = getBeta(rtn_pure[col], rtn_bm_pure)
+            betas.append(beta)
+        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm'])
+        expected_return = (betas_df.intercept
+                           + betas_df.beta_bm * rtn_bm_pure.iloc[-self.avg_window:].mean().values)
 
-        # 4. alpha 계산
-        alpha = rtn_pure.mean(axis=0) - beta * rtn_bm_pure.mean(axis=0).values
-
-        # 4. 기대수익률 계산
-        return alpha + beta * rtn_bm_pure.iloc[-self.avg_window:].mean().values
+        # 6. 기대수익률 계산
+        return expected_return
 
     def _ff3(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, hml:pd.DataFrame, smb:pd.DataFrame, window:int, bday:int):
         '''
@@ -214,18 +230,18 @@ class Calculator:
         :return: dataframe of expected return
         '''
         # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
-        rf = (1+rf).iloc[-(window + 1):-1]**(1/bday)-1
+        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rf = (1+rf).iloc[-window:]**(1/bday)-1
         rtn_pure = rtn - rf.values
 
         # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_bm_pure = rtn_bm - rf.values
 
         # 3. hml, smb 수익률(-rf) 계산
-        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_hml_pure = rtn_hml - rf.values
-        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_smb_pure = rtn_smb - rf.values
 
         # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
@@ -258,22 +274,22 @@ class Calculator:
         :return: expected return
         '''
         # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
-        rf = (1+rf).iloc[-(window + 1):-1]**(1/bday)-1
+        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rf = (1+rf).iloc[-window:]**(1/bday)-1
         rtn_pure = rtn - rf.values
 
         # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_bm_pure = rtn_bm - rf.values
 
         # 3. hml, smb 수익률(-rf) 계산
-        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_hml_pure = rtn_hml - rf.values
-        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_smb_pure = rtn_smb - rf.values
-        rtn_op = op.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_op = op.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_op_pure = rtn_op - rf.values
-        rtn_inv = inv.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_inv = inv.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_inv_pure = rtn_inv - rf.values
 
         # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
@@ -300,20 +316,20 @@ class Calculator:
         :return: dataframe of expected return
         '''
         # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
-        rf = (1+rf).iloc[-(window + 1):-1]**(1/bday)-1
+        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rf = (1+rf).iloc[-window:]**(1/bday)-1
         rtn_pure = rtn - rf.values
 
         # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_bm_pure = rtn_bm - rf.values
 
         # 3. hml, smb 수익률(-rf) 계산
-        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_hml_pure = rtn_hml - rf.values
-        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_smb_pure = rtn_smb - rf.values
-        rtn_mom = mom.pct_change(periods=1, fill_method=None).iloc[-(window + 1):-1]
+        rtn_mom = mom.pct_change(periods=1, fill_method=None).iloc[-window:]
         rtn_mom_pure = rtn_mom - rf.values
 
         # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
@@ -341,23 +357,35 @@ class Calculator:
         '''
         return ((actual - pred) ** 2).mean()
 
-    def _ic(self, actual, pred):
+    def _corr(self, actual, pred, method):
         '''
-        Information Coefficient
+        Correlation Coefficient
         :param actual: actual return
         :param pred: predicted return
-        :return: IC value
+        :param method: 'pearson' or 'spearman'
+        :return: Corr value
         '''
-        return actual.corr(pred)
+        if method=='pearson' or method is None:
+            return actual.corr(pred)
+        elif method=='spearman':
+            return spearman_corr(actual, pred)
+        else:
+            raise ValueError('method should be either pearson or spearman')
 
-    def _rankic(self, actual, pred):
+    def _rankcorr(self, actual, pred, method):
         '''
-        Rank Information Coefficient
+        Rank Correlation Coefficient
         :param actual: actual return
         :param pred: predicted return
-        :return: Rank IC value
+        :param method: 'pearson' or 'spearman'
+        :return: Rank Corr value
         '''
-        return actual.rank().corr(pred.rank())
+        if method=='pearson':
+            return actual.rank().corr(pred.rank())
+        elif method=='spearman' or method is None:
+            return spearman_corr(actual.rank(), pred.rank())
+        else:
+            raise ValueError('method should be either pearson or spearman')
 
     def _ir(self, actual, pred):
         '''
@@ -366,115 +394,4 @@ class Calculator:
         :param pred: predicted return
         :return: IR value
         '''
-        return ((actual - pred) / pred.std()).mean()
-
-
-def get_eval_df(filepath):
-    c = load_pickle(filepath)
-
-    p = cal.evaluate(c)
-    p_df = pd.DataFrame(p).set_index(0)
-
-    return p_df
-
-
-if __name__ == '__main__':
-
-    country = 'europe' #'us' or 'korea' or 'japan' or 'europe
-
-    rf_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_riskfree.csv', dtype=float, index_col=0, parse_dates=True)
-    price_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_price.csv', dtype=float, index_col=0, parse_dates=True)
-    halt_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_halt.csv', dtype=float, index_col=0, parse_dates=True)
-    mkt_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_marketvalue.csv', dtype=float, index_col=0, parse_dates=True)
-    bv_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_bookvalue.csv', dtype=float, index_col=0, parse_dates=True)
-    bm_df = pd.read_csv(f'./output/{country}/bm/price_bm_m.csv', dtype=float, index_col=0, parse_dates=True)
-    smb_df = pd.read_csv(f'./output/{country}/bm/price_smb_m.csv', dtype=float, index_col=0, parse_dates=True)
-    hml_df = pd.read_csv(f'./output/{country}/bm/price_hml_m.csv', dtype=float, index_col=0, parse_dates=True)
-    mom_df = pd.read_csv(f'./output/{country}/bm/price_mom_m.csv', dtype=float, index_col=0, parse_dates=True)
-    op_df = pd.read_csv(f'./output/{country}/bm/price_op_m.csv', dtype=float, index_col=0, parse_dates=True)
-    inv_df = pd.read_csv(f'./output/{country}/bm/price_inv_m.csv', dtype=float, index_col=0, parse_dates=True)
-
-    # Unify index of all data to max lower bound
-    basedate = findBaseDate(rf_df, price_df, halt_df, mkt_df, bm_df, smb_df, hml_df, mom_df, op_df, inv_df)
-    rf_df = rf_df[rf_df.index >= basedate]
-    price_df = price_df[price_df.index >= basedate]
-    halt_df = halt_df[halt_df.index >= basedate]
-    mkt_df = mkt_df[mkt_df.index >= basedate]
-    bm_df = bm_df[bm_df.index >= basedate]
-    # also unify index for factors
-    smb_df = smb_df[smb_df.index >= basedate]
-    hml_df = hml_df[hml_df.index >= basedate]
-    mom_df = mom_df[mom_df.index >= basedate]
-    op_df = op_df[op_df.index >= basedate]
-    inv_df = inv_df[inv_df.index >= basedate]
-
-    cal = Calculator(price=price_df, halt=halt_df, rf=rf_df, bm=bm_df)
-    '''
-    datawindow = 60 # 사용할 데이터의 window
-    basewindow = 61 # 넉넉하게 부여
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_3m_60m.pkl')
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_12m_60m.pkl')
-
-
-    c = cal.run(method='mean', resample='M', basewindow=basewindow, window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/mean_3m_60m.pkl')
-    c = cal.run(method='mean', resample='M', basewindow=basewindow, window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/mean_12m_60m.pkl')
-
-    c = cal.run(method='capm', resample='M', basewindow=basewindow, window=datawindow, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/capm_3m_60m.pkl')
-    c = cal.run(method='capm', resample='M', basewindow=basewindow, window=datawindow, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/capm_12m_60m.pkl')
-
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_3m_60m.pkl')
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_12m_60m.pkl')
-
-    c = cal.run(method='ch4', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ch4_3m_60m.pkl')
-    c = cal.run(method='ch4', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ch4_12m_60m.pkl')
-    
-    c = cal.run(method='ff5', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, op=op_df, inv=inv_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff5_3m_60m.pkl')
-    c = cal.run(method='ff5', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, op=op_df, inv=inv_df, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff5_12m_60m.pkl')
-    quit()'''
-
-    mean_3m_60m = get_eval_df(f'./output/{country}/Expected_Return/mean_3m_60m.pkl')
-    mean_12m_60m = get_eval_df(f'./output/{country}/Expected_Return/mean_12m_60m.pkl')
-    capm_3m_60m = get_eval_df(f'./output/{country}/Expected_Return/capm_3m_60m.pkl')
-    capm_12m_60m = get_eval_df(f'./output/{country}/Expected_Return/capm_12m_60m.pkl')
-    ff3_3m_60m = get_eval_df(f'./output/{country}/Expected_Return/ff3_3m_60m.pkl')
-    ff3_12m_60m = get_eval_df(f'./output/{country}/Expected_Return/ff3_12m_60m.pkl')
-    ch4_3m_60m = get_eval_df(f'./output/{country}/Expected_Return/ch4_3m_60m.pkl')
-    ch4_12m_60m = get_eval_df(f'./output/{country}/Expected_Return/ch4_12m_60m.pkl')
-    ff5_3m_60m = get_eval_df(f'./output/{country}/Expected_Return/ff5_3m_60m.pkl')
-    ff5_12m_60m = get_eval_df(f'./output/{country}/Expected_Return/ff5_12m_60m.pkl')
-
-    print('mean_3m_60m : \n', mean_3m_60m.mean())
-    print('mean_12m_60m : \n', mean_12m_60m.mean())
-    print('capm_3m_60m : \n', capm_3m_60m.mean())
-    print('capm_12m_60m : \n', capm_12m_60m.mean())
-    print('ff3_3m_60m : \n', ff3_3m_60m.mean())
-    print('ff3_12m_60m : \n', ff3_12m_60m.mean())
-    print('ch4_3m_60m : \n', ch4_3m_60m.mean())
-    print('ch4_12m_60m : \n', ch4_12m_60m.mean())
-    print('ff5_3m_60m : \n', ff5_3m_60m.mean())
-    print('ff5_12m_60m : \n', ff5_12m_60m.mean())
-
-    print('done')
-
-    '''
-    Note
-    - 보다 장기 window의 regression 베타와 장기 mean vector를 사용하면 할수록 CAPM이 단순 과거 수익률 평균보다 낮은 MSFE와 높은 IR을 기록
-    - FF3, CH4 모델은 CAPM보다 높은 MSFE와 낮은 IR을 기록
-    - FF3, CH4 모델은 장기 window의 regression 베타와 장기 mean vector를 사용하면 할수록 MSFE가 높아지고 IR이 낮아짐
-    - 다만, IC와의 관계는 불확실, 한국은 (-)의 관계가 나오지만, 미국은 (+)의 관계가 나옴
-    - 한국은 FF3 < CH4 관계가 성립되나, 미국은 다소 불확실함(MSFE 기준)
-    #하 시발 어렵다
-        
-    '''
+        return ((actual - pred) / (actual-pred).std()).mean()

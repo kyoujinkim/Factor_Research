@@ -11,6 +11,8 @@ import warnings
 
 from statsmodels.regression.rolling import RollingOLS
 from statsmodels.tools import add_constant
+import riskfolio as rp
+import riskfolio.src.ParamsEstimation as pe
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 
@@ -64,6 +66,9 @@ def filterByMarket(market_df, code_list:list, market_type:str=None):
     만약 market_type이 None이면 KOSPI/KOSDAQ 모두 필터링
     :return:
     '''
+    if isinstance(market_df, type(None)):
+        return code_list
+
     # 1. market_df에서 code_list에 해당하는 종목만 필터링
     market_df = market_df[code_list]
     # 2. 반드시 필터링해야하는 Exchange 제외
@@ -79,6 +84,23 @@ def filterByMarket(market_df, code_list:list, market_type:str=None):
 
     return filtered_df.index.to_list()
 
+def filterByIndustry(industry_df, code_list:list, industry:str):
+    '''
+    Sector 구분
+    :param industry_df: 업종 데이터
+    :param code_list: 종목코드
+    :param industry: 업종
+    :return:
+    '''
+    if isinstance(industry_df, type(None)):
+        return code_list
+
+    len_ind = len(industry)
+    industry_df = industry_df[code_list].str[:len_ind]
+    filtered_df = industry_df[industry_df == industry].dropna()
+
+    return filtered_df.index.to_list()
+
 def filterByHalt(halt_df, code_list:list):
     '''
     거래정지된 종목 제외
@@ -86,6 +108,9 @@ def filterByHalt(halt_df, code_list:list):
     :param code_list: 종목코드
     :return:
     '''
+    if isinstance(halt_df, type(None)):
+        return code_list
+
     halt_df = halt_df[code_list]
     filtered_df = halt_df[halt_df == 0].dropna()
 
@@ -99,6 +124,9 @@ def filterByMarketValue(mktval_df, code_list:list, top_n=200):
     :param top_n: 상위 N개 종목 int or list(top_n, bottom_n)
     :return:
     '''
+    if isinstance(mktval_df, type(None)):
+        return code_list
+
     mktval_df = mktval_df[code_list]
     if type(top_n) == list:
         # if top_n is int, calculate top and bottom
@@ -207,6 +235,12 @@ def getBeta(y, *x):
 
     return np.ravel(np.linalg.inv(X.T @ X) @ X.T @ y)
 
+def spearman_corr(x, y):
+
+    r = 1 - 6 * np.sum((x - y) ** 2) / (len(x) * (len(x) ** 2 - 1))
+
+    return r
+
 def calcCoeff(data):
     y = data[0]
     x = data[1]
@@ -273,7 +307,11 @@ def filterByFactor(factor_df, code_list:list, top_n=200, short:bool=False):
     :param top_n: 상위 N개 종목
     :return:
     '''
-    factor_df = factor_df[code_list].dropna()
+    # in some case, factor_df does not contain all code_list,
+    # so we need to filter factor_df by which only duplicated with code_list
+    ids = pd.Series(code_list + factor_df.index.tolist())
+    temp_list = ids[ids.duplicated()].unique().tolist()
+    factor_df = factor_df[temp_list].dropna()
 
     if type(top_n) == list:
         # if top_n is int, calculate top and bottom
@@ -348,6 +386,34 @@ def weightFactor(code_list:list, factor_df):
     # log factor_df
     log_factor = (1+factor_df).clip(upper=10)
     weight = log_factor/log_factor.sum()
+
+    return weight
+
+def weightMVO(code_list:list, rtn_df:pd.DataFrame, factor_df:pd.DataFrame, rm:str):
+    '''
+    MVO 포트폴리오의 비중 계산
+    :param code_list: 필터링된 종목 코드
+    :param price_df: 종목 주가 데이터
+    :param factor_df: 종목 수익률 데이터
+    :param rm: risk measure (e.g. MV, MDD, CVaR, etc.) - https://riskfolio-lib.readthedocs.io/
+    :return:
+    '''
+    rtn_df = rtn_df[code_list].dropna(how='all', axis=1).fillna(0)
+    factor_df = factor_df[code_list]
+
+    port = rp.Portfolio(returns=rtn_df)
+    port.mu = pd.DataFrame(factor_df).T # expected returns should be a DataFrame with company name header
+    port.cov = pe.covar_matrix(rtn_df)
+    model = 'Classic'
+    obj = 'Sharpe'
+    hist = True
+
+    # in some case, MVO failed to optimize and return nothing. So we need to handle exception.
+    try:
+        weight = port.optimization(model=model, rm=rm, obj=obj, hist=hist).squeeze()
+        weight.name = rtn_df.index[-1]
+    except:
+        weight = pd.Series(1/len(rtn_df.columns), index=rtn_df.columns, name=rtn_df.index[-1])
 
     return weight
 
