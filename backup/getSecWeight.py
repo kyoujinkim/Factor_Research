@@ -2,7 +2,7 @@ import pandas as pd
 from src.funs import *
 from src.calcWeight import WeightBuilder
 
-country = 'europe'  # 'us' or 'korea' or 'japan' or 'europe'
+country = 'us'  # 'us' or 'korea' or 'japan' or 'europe'
 rebal_freq = 'm'
 
 # 1. 데이터 불러오기
@@ -49,7 +49,7 @@ ind_list = map_ind.loc[unique_ind]
 
 if __name__ == "__main__":
     # industry portfolio 계산
-    weighting_method = 'mktval'
+    weighting_method = 'equal'
     wb = WeightBuilder(rebal_freq=rebal_freq, startdate=startdate, enddate=None
                        , mktval_top_n=-1, factor_top_n=-1
                        , price_bd=price_bd, market_bd=market_bd, halt_bd=halt_bd, mktval_bd=mktval_bd

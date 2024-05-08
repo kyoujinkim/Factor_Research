@@ -22,7 +22,7 @@ class WeightBuilder:
         :param enddate: 테스트 종류일
         :param market_type: KOSPI/KOSDAQ
         :param mktval_top_n: 시가총액 상위 N개 종목 (list, int or float)
-        :param factor_top_n: 팩터 상위 N개 종목 (list, int or float)
+        :param factor_top_n: 팩터 상위 N개 종목 (list, int or float) [list->top, bottom, max_n]
         '''
 
         self.market_type = market_type
@@ -62,12 +62,14 @@ class WeightBuilder:
         /rm: str: risk measure(e.g. MV, MDD. CVaR, etc.) - https://riskfolio-lib.readthedocs.io/
         /industry: str: 선택하려는 산업 (클래스 선언부에서 industry_bd가 None이 아닌 경우에만 동작함)
         /workers: int: 멀티프로세싱을 위한 워커 수
+        /active_multiproc: bool: 멀티프로세싱 활성화 여부
         :return: 비중값 데이터프레임
         '''
         weight_limit = kwargs.get('weight_limit', None)
         rm = kwargs.get('rm', 'MV')
         industry = kwargs.get('industry', None)
         workers = kwargs.get('workers', os.cpu_count()-1)
+        active_multiproc = kwargs.get('active_multiproc', True)
 
         # should wrap up self variables to use multiprocessing in proper way
         # date_list, factor_df, factor_window, weighting_method, market_type, mktval_top_n, factor_top_n
@@ -107,10 +109,17 @@ class WeightBuilder:
                     , weight_limit, rm, industry]
                 var_list.append(var)
 
-            weight = process_map(makeWeight
-                                 , var_list
-                                 , max_workers=workers
-                                 , desc=f'calc weight : {chunk_count}/{multiproc_partition} Partition')
+            # if multiprocessing is active, use process_map, else use for loop
+            # aligning work to multi cpu can takes most of the time rather than for loop calculation
+            if active_multiproc:
+                weight = process_map(makeWeight
+                                     , var_list
+                                     , max_workers=workers
+                                     , desc=f'calc weight : {chunk_count}/{multiproc_partition} Partition')
+            else:
+                weight = []
+                for var in tqdm(var_list):
+                    weight.append(makeWeight(var))
 
             total_weight.extend(weight)
 

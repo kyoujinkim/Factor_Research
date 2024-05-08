@@ -12,8 +12,7 @@ def get_eval_df(filepath, window):
 
 
 if __name__ == '__main__':
-    for country in ['us', 'korea', 'japan']:
-        #country = 'europe'
+    for country in ['korea']:
 
         rf_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_riskfree.csv', dtype=float, index_col=0, parse_dates=True)
         price_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_price.csv', dtype=float, index_col=0, parse_dates=True)
@@ -31,6 +30,7 @@ if __name__ == '__main__':
 
         sec_bm_list = glob(f'./output/{country}/industry_return/sector*.csv')
         method_list = glob(f'./output/{country}/Expected_Return/*.pkl')
+        method_list = glob(f'./output/{country}/Expected_Return/capm_12m_60m.pkl')
 
         result = []
         for method in method_list:

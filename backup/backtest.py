@@ -59,7 +59,7 @@ def get_result_csv(result):
 # C:\Users\NHWM\anaconda3\envs\Factor_Research\Lib\site-packages\ffn\core.py
 # change TRADING_DAYS_PER_YEAR => 52 # default value was 252
 
-country = 'japan' #'us' or 'korea' or 'japan' or 'europe'
+country = 'us' #'us' or 'korea' or 'japan' or 'europe'
 rebal_freq = 'm'
 
 '''load data'''
@@ -71,10 +71,11 @@ div_bd = div_bd.shift(-1).fillna(0)
 
 '''load weight'''
 #weight_list = glob(f'./weight/{country}/*.csv')
-weight_list = glob(f'./weight/{country}/*REV*.csv')
+bm_list = glob(f'./weight/{country}/BM+mktval*.csv')
+weight_list = glob(f'./weight/{country}/*1m+12m*optmvo+MV*.csv')
+weight_list = bm_list + weight_list
 
 if __name__ == "__main__":
-
 
     bt_list = []
     for weight in weight_list:
@@ -84,12 +85,12 @@ if __name__ == "__main__":
     #res.set_date_range(start='2012-01-01')
 
     res_text = get_result_csv(res)
-    with open(f'./output/{country}/result_REV_{rebal_freq}.csv', 'w') as out:
+    with open(f'./output/{country}/result_withBM_{rebal_freq}.csv', 'w') as out:
         out.write(res_text)
     print('\n\n')
     res.display()
 
-    res.prices.to_csv(f'./output/{country}/prices_REV.csv')
+    res.prices.to_csv(f'./output/{country}/prices_withBM.csv')
     #for col in res.prices.columns:
     #    res.prices[col].to_csv(f'./output/{country}/industry_return/{col}.csv')
 

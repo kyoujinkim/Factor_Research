@@ -7,28 +7,9 @@ from src.funs import *
 from src.calcWeight import WeightBuilder
 
 
-def get_exp_ret(path) -> pd.DataFrame:
-    '''
-    get expected return from pickle file
-    :param path: file format should be pickle
-    :return: dataframe
-    '''
-    expret = load_pickle(path)
-    predictions = []
-    for item in expret:
-        pred = item[1]['prediction']
-        # since data is aligned to the date of actual return, shift it to previous month end
-        pred.name = item.name - MonthEnd(1)
-        predictions.append(pred)
-
-    pred_df = pd.concat(predictions, axis=1).T
-
-    return pred_df
-
-
 if __name__ == "__main__":
 
-    country = 'japan'  # 'us' or 'korea' or 'japan' or 'europe'
+    country = 'us'  # 'us' or 'korea' or 'japan' or 'europe'
     rebal_freq = 'm'
 
     # 1. 데이터 불러오기
@@ -45,7 +26,7 @@ if __name__ == "__main__":
     # 1-5. 산업분류 불러오기
     industry_bd = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_industry.csv', dtype=str, index_col=0, parse_dates=True)
 
-    ERpath = glob(f'./output/{country}/Expected_Return/*.pkl')
+    ERpath = glob(f'./output/{country}/Expected_Return/ff6*.pkl')
     for path in ERpath:
         name = path.split('\\')[-1].replace('.pkl','').replace('_','+')
         # 2. 예상수익률 불러오기
@@ -83,14 +64,14 @@ if __name__ == "__main__":
             weighting_method = 'optmvo'
 
             # if path exists, skip
-            if len(glob(f'./weight/{country}/{name}+{weighting_method}+REV{rm}+{rebal_freq}_*.csv'))>0:
+            if len(glob(f'./weight/{country}/{name}+{weighting_method}+{rm}+{rebal_freq}_*.csv'))>0:
                 continue
 
             wb = WeightBuilder(rebal_freq=rebal_freq, startdate=startdate, enddate=None
                                , mktval_top_n=-1, factor_top_n=200
                                , price_bd=price, market_bd=market, halt_bd=halt, mktval_bd=mktval
                                )
-            weight = wb.calcWeight(factor_bd=-pred
+            weight = wb.calcWeight(factor_bd=pred
                                    , listed_window=52
                                    , weighting_method=weighting_method
                                    , multiproc_partition=1
@@ -98,4 +79,4 @@ if __name__ == "__main__":
                                    , rm=rm
                                    )
             weight.to_csv(
-                f'./weight/{country}/{name}+{weighting_method}+REV{rm}+{rebal_freq}_{weight.index[0].strftime("%Y-%m-%d")}_{price_bd.index[-1].strftime("%Y-%m-%d")}.csv')
+                f'./weight/{country}/{name}+{weighting_method}+{rm}+{rebal_freq}_{weight.index[0].strftime("%Y-%m-%d")}_{price_bd.index[-1].strftime("%Y-%m-%d")}.csv')

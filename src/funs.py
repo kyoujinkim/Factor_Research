@@ -225,15 +225,24 @@ def calculateInv(ta):
 
     return inv.dropna(axis=0, how='all')
 
-def getBeta(y, *x):
+def getBeta(y, *x, intercept:bool=True):
     # argument *x to array
     X = np.array(x)
-    X = X[:,:,-1]
+    if len(X.shape) > 2:
+        X = X.reshape([X.shape[0], X.shape[1]])
     y = np.array(y)
     y = y.reshape(-1, 1)
-    X = np.vstack([np.ones(len(y)), X]).T
 
-    return np.ravel(np.linalg.inv(X.T @ X) @ X.T @ y)
+    if intercept:
+        X = np.vstack([np.ones(len(y)), X]).T
+    else:
+        X = X.T
+
+    if X.shape[1] == 1:
+        return y.sum() / X.sum()
+    else:
+        return np.ravel(np.linalg.inv(X.T @ X) @ X.T @ y)
+
 
 def spearman_corr(x, y):
 
@@ -315,15 +324,27 @@ def filterByFactor(factor_df, code_list:list, top_n=200, short:bool=False):
 
     if type(top_n) == list:
         # if top_n is int, calculate top and bottom
+        if len(top_n) > 2:
+            max_n = top_n[2]
+        else:
+            max_n = -1
         if type(top_n[0]) == int:
             top = top_n[0]
-            bottom = top_n[1]
         # if top_n is float, calculate top and bottom
         elif type(top_n[0]) == float:
             top = int(top_n[0] * len(factor_df))
+        else:
+            raise ValueError('element of top_n(top) must be int or float')
+        if type(top_n[1]) == int:
+            bottom = top_n[1]
+        # if top_n is float, calculate top and bottom
+        elif type(top_n[1]) == float:
             bottom = int(top_n[1] * len(factor_df))
         else:
-            raise ValueError('element of top_n(top, bottom) must be int or float')
+            raise ValueError('element of top_n(bottom) must be int or float')
+
+        if max_n != -1:
+            bottom = min(bottom, max_n)
 
         if short: # if short is True, calculate for short
             filtered_df = factor_df[(factor_df.rank(ascending=True) >= top)&(factor_df.rank(ascending=True) <= bottom)].dropna()
