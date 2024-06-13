@@ -19,19 +19,6 @@ from tqdm.contrib.concurrent import process_map
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=RuntimeWarning)
 
-'''
-목표: 한국 시장에서 모멘텀 포트의 성과 구하기
-따라서 우선 모멘텀 포트를 구성하기 위한 모멘텀 팩터를 계산해야 함
-모멘텀 팩터는 12개월 수익률과 1개월 수익률의 차이로 계산
-모멘텀 포트는 다음과 같은 필터링 Function을 통해 구성
-입력값은 데이터 담고 있는 DataFrame과 종목코드
-1.KOSPI/KOSDAQ 구분
-2.거래정지된 종목 제외
-3.시가총액 상위 N개 종목
-4.모멘텀 팩터가 가장 높은 상위 N개 종목
-'''
-# 상장된지 1년된 종목만 필터링
-
 def save_pickle(data, filepath):
     with open(filepath, 'wb') as f:
         pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
@@ -344,7 +331,7 @@ def filterByFactor(factor_df, code_list:list, top_n=200, short:bool=False):
             raise ValueError('element of top_n(bottom) must be int or float')
 
         if max_n != -1:
-            bottom = min(bottom, max_n)
+            bottom = min(bottom, top+max_n)
 
         if short: # if short is True, calculate for short
             filtered_df = factor_df[(factor_df.rank(ascending=True) >= top)&(factor_df.rank(ascending=True) <= bottom)].dropna()

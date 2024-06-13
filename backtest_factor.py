@@ -1,17 +1,7 @@
 import warnings
-from glob import glob
-
 import pandas as pd
-import numpy as np
-import datetime as dt
-import os
 import bt
-import matplotlib.pyplot as plt
-import itertools
 
-from tqdm import tqdm
-
-import quantstats as qs
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
@@ -47,6 +37,19 @@ def run_bt(weight_path, price_bd, div_bd):
 def load_weight_and_backtest(price_bd, div_bd, weight_path, output_path):
     res = bt.run(run_bt(weight_path, price_bd, div_bd))
     res.prices.to_csv(output_path)
+
+def export_factor(country='us', rebal_freq='m', factor_list=['BM', 'HML', 'SMB', 'MOM', 'OP', 'INV']):
+
+    result = []
+    for factor in factor_list:
+        factor_data = pd.read_csv(f'./output/{country}/bm/{factor}_{rebal_freq}.csv', index_col=0, parse_dates=True)
+        result.append(factor_data)
+
+    result = pd.concat(result, axis=1)
+
+    result.to_csv(f'output/0.export/{country}/factor_ts.csv')
+
+    return True
 
 def backtest(country='us', rebal_freq='m', factor_list=['BM', 'HML', 'SMB', 'MOM', 'OP', 'INV']):
 

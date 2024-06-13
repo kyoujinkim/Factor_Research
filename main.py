@@ -1,22 +1,26 @@
 import pandas as pd
 from get_factor_weight import calc_factor_weight, calc_mvo_weight
-from backtest_factor import backtest
+from backtest_factor import backtest, export_factor
 from get_ER import calculate_Expected_Return
 from groupby_ER import groupER
 
 if __name__ == '__main__':
     # 1. Calculate Factor Index
     ## 1-1. Calculate Factor Index Weight
-    '''for country in ['korea', 'us', 'japan', 'europe']:
+    for country in ['korea', 'us', 'japan', 'europe']:
         calc_factor_weight(country, 'm')
 
     ## 1-2. Calculate Factor Index
     for country in ['korea', 'us', 'japan', 'europe']:
-        backtest(country, 'm')'''
+        backtest(country, 'm')
+
+    ## export factor index
+    for country in ['korea', 'us', 'japan', 'europe']:
+        export_factor(country)
 
     # 2. Calculate Expected Return
     print('Calculate Expected Return')
-    end_date = '2024-04-30'
+    end_date = '2024-05-31'
     model_list = [
         ['korea', 'sr2', 3, 60, end_date]
         , ['us', 'ch4', 3, 12, end_date]
@@ -29,7 +33,7 @@ if __name__ == '__main__':
 
 
     print('Calculate MV Optimized Weight for Expected return')
-    #snapdate = '2024-02-23'd
+    #snapdate = '2024-02-23'
     # snapdate, country, reverse, rebal_freq, model, avgwindow, datawindow, weightlimit = 0.1
     model_list = [
         [snapdate, 'korea', 'm', 'sr2', 3, 60, 0.05]
@@ -41,7 +45,7 @@ if __name__ == '__main__':
     for country_model in model_list:
         calc_mvo_weight(*country_model)
 
-
+    snapdate = '2024-05-31'
     print('Calculate Formatted Expected return')
     model_list = [
         [snapdate, 'korea', 'sr2', 3, 60]

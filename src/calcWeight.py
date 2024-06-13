@@ -169,8 +169,7 @@ def makeWeight(var):
         weight = weightMVO(code_list, rtn_df, factor_df, rm)
     # 방법론 중에 없는 경우 경고 표시후 종료
     else:
-        warnings.warn('해당 방법론은 없습니다. 다시 입력해주세요.')
-        return None
+        raise Exception('해당 방법론은 없습니다. 다시 입력해주세요.')
     weight = pd.DataFrame(weight).T
 
     if type(weight_limit) == float:

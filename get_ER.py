@@ -57,7 +57,9 @@ def calculate_Expected_Return(country, model, avg_window, window, end: str = Non
     cal = Calculator(price=price_df, halt=halt_df, rf=rf_df, bm=bm_df)
 
     c = cal.run_snapshot(method=model, resample='M', basewindow=basewindow, window=window, mom= mom_df, hml=hml_df, smb=smb_df, op=op_df, inv=inv_df, avg_window=avg_window, end=end)
+    betas = cal.run_snapshot(method='ff6', resample='M', basewindow=basewindow, window=window, mom= mom_df, hml=hml_df, smb=smb_df, op=op_df, inv=inv_df, avg_window=avg_window, end=end, view_betas=True)
 
     c.to_csv(f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m_snapshot{c.name.strftime("%Y-%m-%d")}.csv')
+    betas.to_csv(f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m_snapshot_betas_{c.name.strftime("%Y-%m-%d")}.csv')
 
     return c.name.strftime("%Y-%m-%d")

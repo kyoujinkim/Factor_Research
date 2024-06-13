@@ -19,9 +19,11 @@ def adjust_reverse(eachc, reverse):
 def groupER(snapdate, country, model, avg_window, lr_window):
 
     ER_path = f'./output/{country}/Expected_Return/{model}_{avg_window}m_{lr_window}m_snapshot{snapdate}.csv'
+    Beta_path = f'./output/{country}/Expected_Return/{model}_{avg_window}m_{lr_window}m_snapshot_betas_{snapdate}.csv'
 
     ER = pd.read_csv(ER_path, index_col=0, dtype=float, parse_dates=True)
     ER.columns = ['ER']
+    ER = ER.sort_values('ER', ascending=False)[5:-5]
     mktval = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_marketvalue.csv', dtype=float, index_col=0, parse_dates=True).iloc[-1]
     industry = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_industry.csv', dtype=str, index_col=0, parse_dates=True).iloc[-1]
     price = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_price.csv', dtype=float, index_col=0, parse_dates=True).iloc[-53:]
@@ -40,6 +42,11 @@ def groupER(snapdate, country, model, avg_window, lr_window):
         sector_length = 2
     ER['industry'] = industry.str[:sector_length]
 
+    Beta = pd.read_csv(Beta_path, index_col=0, dtype=float, parse_dates=True)
+    Beta = Beta.loc[ER.index]
+    Beta['mktval'] = mktval
+    Beta['industry'] = industry.str[:sector_length]
+
     #calculate ER weighted by market value
     weighted_ER = ER['mktvalER'].sum() / ER['mktval'].sum()
     mean_ER = ER['ER'].mean()
@@ -50,6 +57,7 @@ def groupER(snapdate, country, model, avg_window, lr_window):
     #calculate mktval weighted ER by industry group
     industry_ER = ER.groupby('industry')['mktvalER'].sum() / ER.groupby('industry')['mktval'].sum()
     industry_mean_ER = ER.groupby('industry')['ER'].mean()
+    industry_beta = Beta.groupby('industry').mean()
 
     #calculate factor return
     factor_result = []
@@ -71,15 +79,16 @@ def groupER(snapdate, country, model, avg_window, lr_window):
     tempER = ER.copy()
     tempER['mktvalpct'] = mktval_percentile.copy()
     tempER = tempER[tempER.mktvalpct >= 0.05]
-    tempER = tempER.sort_values('ER', ascending=False).iloc[10:]
 
     ERtop10 = tempER.sort_values('Sharpe', ascending=False).head(20)
     ERbot10 = tempER.sort_values('Sharpe', ascending=True).head(20)
 
     result_dict = {
-        'wmean_ER': pd.DataFrame([weighted_ER, mean_ER], index=['wmean_ER', 'mean_ER'], columns=['Index Expected Return'])
+        'total_ER': ER
+        , 'beta': Beta
+        , 'wmean_ER': pd.DataFrame([weighted_ER, mean_ER], index=['wmean_ER', 'mean_ER'], columns=['Index Expected Return'])
         , 'size_ER': pd.concat([size_ER,size_mean_ER], axis=1)
-        , 'industry_ER': pd.concat([industry_ER,industry_mean_ER], axis=1)
+        , 'industry_ER': pd.concat([industry_ER,industry_mean_ER,industry_beta], axis=1)
         , 'factor_result': factor_result
         , 'ERtop+bot10': pd.concat([ERtop10, ERbot10], axis=0)[['industry', 'mktval','size', 'ER', 'Vol', 'Sharpe']]
         , 'optimized20': weight
