@@ -37,9 +37,9 @@ def groupER(snapdate, country, model, avg_window, lr_window):
     ER['mktval'] = mktval
     ER['mktvalER'] = ER['ER'] * ER['mktval']
     if country == 'korea':
-        sector_length = 3
+        sector_length = 5
     else:
-        sector_length = 2
+        sector_length = 8
     ER['industry'] = industry.str[:sector_length]
 
     Beta = pd.read_csv(Beta_path, index_col=0, dtype=float, parse_dates=True)

@@ -72,7 +72,7 @@ class Calculator:
         #result = []
         #for i in tqdm(range(basewindow+1, len(self.price))):
         #    result.append(self._iterrun([method, bday, basewindow, window, i, False]))
-        iterator = list(itertools.product([method], [bday], [basewindow], [window], range(basewindow+1, len(self.price)), [False]))
+        iterator = list(itertools.product([method], [bday], [basewindow], [window], range(basewindow+1, len(self.price)+1), [False]))
         result = process_map(self._iterrun, iterator, max_workers=os.cpu_count()-2)
 
         return result
@@ -88,7 +88,10 @@ class Calculator:
         :param kwargs: additional arguments
         :return: dataframe of expected return
         '''
-        self.price = self.price_bd[self.price_bd.index <= end].resample(resample).last()
+        if end is not None:
+            self.price = self.price_bd[self.price_bd.index <= end].resample(resample).last()
+        else:
+            self.price = self.price_bd.resample(resample).last()
         self.rf = self.rf_bd.resample(resample).last()
         self.bm = self.bm_bd.resample(resample).last()
 
@@ -499,7 +502,6 @@ class Calculator:
         :param price: price of equities
         :param rf: risk free ratio
         :param bm: benchmark price index
-        :param strev: short term reversion of equities
         :param window: window size for expected return calculation
         :param bday: bday
         :return: dataframe of expected return
