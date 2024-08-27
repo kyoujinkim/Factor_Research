@@ -32,8 +32,8 @@ if __name__ == '__main__':
 
     snapdate =calculate_Expected_Return_totalTS(*model_list[0])
 
-    #for country_model in model_list:
-    #    snapdate = calculate_Expected_Return(*country_model)
+    for country_model in model_list:
+        snapdate = calculate_Expected_Return(*country_model)
 
 
     '''print('Calculate MV Optimized Weight for Expected return')

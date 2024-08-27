@@ -565,10 +565,10 @@ class Calculator:
 
         # apply reversion signal in to return
         result['ER_fit'] = result.apply(lambda x: -x.ER_stret if x.Sign else x.ER_stret, axis=1)
-        # contract minus return
-        result['ER_fit'] = result.ER_fit.apply(lambda x: -abs(x)*(1-abs(x)) if x<0 else x)
         # unnormalize return
         result.ER_fit += ER_mean
+        # contract minus return
+        result['ER_fit'] = result.ER_fit.apply(lambda x: -abs(x)*(1-abs(x)) if x<0 else x)
 
         # 6. 기대수익률 계산
         return result.ER_fit, betas_df
