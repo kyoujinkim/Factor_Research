@@ -16,7 +16,19 @@ def adjust_reverse(eachc, reverse):
 
     return pd.DataFrame(adj_eachc.values, columns=['ER'], index=adj_eachc.index)
 
-def groupER(snapdate, country, model, avg_window, lr_window):
+def groupER(snapdate, country, model, avg_window, lr_window, industry_length=2, mktpct=0.7):
+    '''
+    make formatted output for Expected Return
+    :param snapdate: date of snapshot
+    :param country: country name(korea, us, japan, europe)
+    :param model: model name(capm, sr2, ch4)
+    :param avg_window: average window
+    :param lr_window: long term window
+    :param industry_length: length of industry code(korea: 2, others: 1)
+    :param mktpct: market value percentile(larger than x)
+    :return: None
+    '''
+
 
     ER_path = f'./output/{country}/Expected_Return/{model}_{avg_window}m_{lr_window}m_snapshot{snapdate}.csv'
     Beta_path = f'./output/{country}/Expected_Return/{model}_{avg_window}m_{lr_window}m_snapshot_betas_{snapdate}.csv'
@@ -37,9 +49,9 @@ def groupER(snapdate, country, model, avg_window, lr_window):
     ER['mktval'] = mktval
     ER['mktvalER'] = ER['ER'] * ER['mktval']
     if country == 'korea':
-        sector_length = 5
+        sector_length = industry_length+1
     else:
-        sector_length = 8
+        sector_length = industry_length
     ER['industry'] = industry.str[:sector_length]
 
     Beta = pd.read_csv(Beta_path, index_col=0, dtype=float, parse_dates=True)
@@ -63,6 +75,8 @@ def groupER(snapdate, country, model, avg_window, lr_window):
     factor_result = []
     factor_weights = glob(f'./weight/{country}/factor_weight/*.csv')
     for weight in factor_weights:
+        if 'equBM' in weight:
+            continue
         factor_name = weight.split('\\')[-1].split('.')[0]
         curr_weight = pd.read_csv(weight, index_col=0, parse_dates=True).iloc[-1].dropna()
         ER[factor_name] = curr_weight
@@ -78,7 +92,7 @@ def groupER(snapdate, country, model, avg_window, lr_window):
 
     tempER = ER.copy()
     tempER['mktvalpct'] = mktval_percentile.copy()
-    tempER = tempER[tempER.mktvalpct >= 0.05]
+    tempER = tempER[tempER.mktvalpct >= mktpct]
 
     ERtop10 = tempER.sort_values('Sharpe', ascending=False).head(20)
     ERbot10 = tempER.sort_values('Sharpe', ascending=True).head(20)

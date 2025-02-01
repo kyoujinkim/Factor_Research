@@ -63,7 +63,7 @@ def calculate_Expected_Return(country, model, avg_window, window, end: str = Non
 
     return c.name.strftime("%Y-%m-%d")
 
-def calculate_Expected_Return_totalTS(country, model, avg_window, window, end: str = None):
+def calculate_Expected_Return_totalTS(country, model, avg_window, window, end: str = None, equbm = False):
     '''
     기대수익률을 계산
 
@@ -72,6 +72,7 @@ def calculate_Expected_Return_totalTS(country, model, avg_window, window, end: s
     :param avg_window: 미래 팩터 수익률로 사용하기 위한 평균값 window
     :param window: 회귀계수를 계산하기 위한 데이터 window
     :param end: 기대수익률을 계산할 최종날짜
+    :param equbm: 동일가중 BM을 사용할지 여부
     :return:
     '''
 
@@ -95,7 +96,10 @@ def calculate_Expected_Return_totalTS(country, model, avg_window, window, end: s
     price_df = price_df * cai_bd
 
     # load factor data
-    bm_df = pd.read_csv(f'./output/{country}/bm/BM_m.csv', dtype=float, index_col=0, parse_dates=True)
+    if equbm:
+        bm_df = pd.read_csv(f'./output/{country}/bm/equBM_m.csv', dtype=float, index_col=0, parse_dates=True)
+    else:
+        bm_df = pd.read_csv(f'./output/{country}/bm/BM_m.csv', dtype=float, index_col=0, parse_dates=True)
     smb_df = pd.read_csv(f'./output/{country}/bm/SMB_m.csv', dtype=float, index_col=0, parse_dates=True)
     hml_df = pd.read_csv(f'./output/{country}/bm/HML_m.csv', dtype=float, index_col=0, parse_dates=True)
     mom_df = pd.read_csv(f'./output/{country}/bm/MOM_m.csv', dtype=float, index_col=0, parse_dates=True)
@@ -119,6 +123,27 @@ def calculate_Expected_Return_totalTS(country, model, avg_window, window, end: s
 
     c = cal.run(method=model, resample='M', basewindow=basewindow, window=window, mom= mom_df, hml=hml_df, smb=smb_df, op=op_df, inv=inv_df, avg_window=avg_window, end=end)
 
-    save_pickle(c, f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m.pkl')
+    save_pickle(c, f'./output/{country}/Expected_Return/{model}{equbm}_{avg_window}m_{window}m.pkl')
 
-    return c.name.strftime("%Y-%m-%d")
+    return c[-1].name.strftime("%Y-%m-%d")
+
+
+if __name__ == '__main__':
+    print('Calculate Total Expected Return')
+    model_list = [
+        ['korea', 'sr2', 3, 60, None, True]
+        , ['us', 'ch4', 3, 12, None, True]
+        , ['japan', 'sr2', 6, 60, None, True]
+        , ['europe', 'capm', 6, 12, None, True]
+        ]
+    for country_model in model_list:
+        calculate_Expected_Return_totalTS(*country_model)
+
+    model_list = [
+        ['korea', 'sr2', 3, 60, None, False]
+        , ['us', 'ch4', 3, 12, None, False]
+        , ['japan', 'sr2', 6, 60, None, False]
+        , ['europe', 'capm', 6, 12, None, False]
+        ]
+    for country_model in model_list:
+        calculate_Expected_Return_totalTS(*country_model)

@@ -6,19 +6,23 @@ from groupby_ER import groupER
 from src.calcEReturn import Calculator
 
 if __name__ == '__main__':
+    country_list = ['korea', 'us', 'japan', 'europe']
     # 1. Calculate Factor Index
     ## 1-1. Calculate Factor Index Weight
-    '''for country in ['korea', 'us', 'japan', 'europe']:
-        calc_factor_weight(country, 'm')'''
+    '''for country in country_list:
+        calc_factor_weight(country, 'm')
 
     ## 1-2. Calculate Factor Index
-    '''for country in ['korea', 'us', 'japan', 'europe']:
-        backtest(country, 'm')
+    for country in country_list:
+        backtest(country
+                 , 'm'
+                 , factor_list = ['BM', 'SMB', 'HML', 'MOM', 'OP', 'INV'])
 
     ## export factor index
-
-    for country in ['korea', 'us', 'japan', 'europe']:
-        export_factor(country)'''
+    for country in country_list:
+        export_factor(country
+                      , factor_list = ['BM', 'SMB', 'HML', 'MOM', 'OP', 'INV']
+                      )
 
     # 2. Calculate Expected Return
     print('Calculate Expected Return')
@@ -30,15 +34,23 @@ if __name__ == '__main__':
         , ['europe', 'capm', 6, 12, end_date]
         ]
 
-    snapdate =calculate_Expected_Return_totalTS(*model_list[0])
-
     for country_model in model_list:
         snapdate = calculate_Expected_Return(*country_model)
 
+    # 3. Calculate Total Expected Return only for korea
+    print('Calculate Total Expected Return')
+    model_list = [
+        ['korea', 'sr2', 3, 60, end_date]
+        , ['us', 'ch4', 3, 12, end_date]
+        , ['japan', 'sr2', 6, 60, end_date]
+        , ['europe', 'capm', 6, 12, end_date]
+        ]
+    for country_model in model_list:
+        calculate_Expected_Return_totalTS(*country_model)
 
-    '''print('Calculate MV Optimized Weight for Expected return')
-    #snapdate = '2024-02-23'
-    # snapdate, country, reverse, rebal_freq, model, avgwindow, datawindow, weightlimit = 0.1
+    print('Calculate MV Optimized Weight for Expected return')
+    #snapdate = '2024-11-29'
+    # snapdate, country, reverse, rebal_freq, model, avgwindow, datawindow, weightlimit
     model_list = [
         [snapdate, 'korea', 'm', 'sr2', 3, 60, 0.05]
         , [snapdate, 'us', 'm', 'ch4', 3, 12, 0.05]
@@ -49,13 +61,13 @@ if __name__ == '__main__':
     for country_model in model_list:
         calc_mvo_weight(*country_model)'''
 
-    '''snapdate = '2024-07-31'
+    snapdate = '2025-01-31'
     print('Calculate Formatted Expected return')
     model_list = [
-        [snapdate, 'korea', 'sr2', 3, 60]
-        , [snapdate, 'us', 'ch4', 3, 12]
-        , [snapdate, 'japan', 'sr2', 6, 60]
-        , [snapdate, 'europe', 'capm', 6, 12]
+        [snapdate, 'korea', 'sr2', 3, 60, 6, 0.2]
+        , [snapdate, 'us', 'ch4', 3, 12, 6, 0.2]
+        , [snapdate, 'japan', 'sr2', 6, 60, 6, 0.2]
+        , [snapdate, 'europe', 'capm', 6, 12, 6, 0.2]
         ]
     for country_model in model_list:
-        groupER(*country_model)'''
+        groupER(*country_model)

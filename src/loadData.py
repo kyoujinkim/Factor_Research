@@ -70,6 +70,15 @@ class Data:
         return f'{self.stock} - {self.data_key}'
 
 
+def err_handler(func):
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except:
+            return None
+    return wrapper
+
+
 class Stock(BaseData):
     """
     Class to represent individual stock, inheriting from BaseData.
@@ -90,21 +99,37 @@ class Stock(BaseData):
         """
         Create a Data object for the given data key and its associated information.
         """
-        return Data(
-            stock=self.stock,
-            data_key=data_key,
-            start=data_info['start'],
-            end=data_info['end'],
-            stat=data_info['stat'],
-            frq=data_info['frq'],
-            cls=BaseData.data_master.get(data_key, {}).get('cls', None)
-        )
+        if type(data_info)==dict:
+            return Data(
+                stock=self.stock,
+                data_key=data_key,
+                start=data_info['start'],
+                end=data_info['end'],
+                stat=data_info['stat'],
+                frq=data_info['frq'],
+                cls=BaseData.data_master.get(data_key, {}).get('cls', None)
+            )
+        else:
+            return Data(
+                stock=self.stock,
+                data_key=data_key,
+                start=None,
+                end=None,
+                stat=None,
+                frq=None,
+                cls=None
+            )
 
+    @err_handler
     def mktpct(self):
         '''
         calculate mktpct of issuance
         :return: pd.DataFrame
         '''
+        # if mktcap data does not exist, though fyshares data exists, return shape of fyshares dataframe filled with 1
+        if self.fyshares.stat is True and self.mktcap.stat is False:
+            return pd.DataFrame(1, index=self.fyshares().index, columns=[self.stock])
+
         shares = self.fyshares() * 10E3
         shares[self.stock] = shares[self.stock].ffill()
         #shares.index = shares.index - MonthEnd(1)
@@ -118,7 +143,7 @@ class Stock(BaseData):
 
         return pd.DataFrame(issuecap.divide(mktcap[self.stock]))
 
-
+    @err_handler
     def EPS(self):
         '''
         build EPS data with stocks' earnings and shares data
@@ -139,6 +164,7 @@ class Stock(BaseData):
 
         return pd.DataFrame(earnings[self.stock].divide(shares[self.stock]))
 
+    @err_handler
     def EP(self):
         '''
         build E/P data with stocks' closeprice and EPS data
@@ -152,6 +178,7 @@ class Stock(BaseData):
 
         return pd.DataFrame(EPS.divide(closeprice))
 
+    @err_handler
     def BPS(self):
         '''
         build BPS data with stocks' bookvalue and shares data
@@ -170,6 +197,7 @@ class Stock(BaseData):
 
         return pd.DataFrame(bookvalue[self.stock].divide(shares[self.stock]))
 
+    @err_handler
     def BP(self):
         '''
         build B/P data with stocks' closeprice and BPS data
@@ -183,6 +211,7 @@ class Stock(BaseData):
 
         return pd.DataFrame(BPS.divide(closeprice))
 
+    @err_handler
     def ROE(self):
         '''
         build ROE data with stocks' EPS and BPS data
@@ -197,14 +226,25 @@ class Stock(BaseData):
         return pd.DataFrame(EPS.divide(BPS))
 
 
-
 class DataProcessor(BaseData):
     """
     Class to manage data and stocks, inheriting from BaseData.
     """
     def __init__(self):
         super().__init__()
-        self.stocks = {}
+        self.stock = {}
+
+    def data_list(self):
+        """
+        Return a list of all data.
+        """
+        return list(self.data_master.keys())
+
+    def stock_list(self):
+        """
+        Return a list of all stocks.
+        """
+        return list(self.equity_master.keys())
 
     def load_stocks(self, instruments: list):
         """
@@ -213,51 +253,43 @@ class DataProcessor(BaseData):
         for instrument in instruments:
             stock_info = self.equity_master.get(instrument)
             if stock_info:
-                self.stocks[instrument] = Stock(instrument, stock_info)
+                self.stock[instrument] = Stock(instrument, stock_info)
             else:
                 print(f"Instrument '{instrument}' not found in equity_master.")
 
-    def load_data(self, data_key: str):
+    def unload_stocks(self):
+        """
+        Unload all stocks.
+        """
+        self.stock = {}
+
+    def load_data_dict(self, data_key: str, start: str=None, end: str=None):
         """
         Load data for all stocks for the given data key.
         """
         data = {}
-        for stock in self.stocks.values():
-            data[stock.stock] = getattr(stock, data_key)()
+        for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
+            data[stock.stock] = getattr(stock, data_key)().loc[start:end]
         return data
 
+    def load_data_df(self, data_key: str, start: str=None, end: str=None):
+        """
+        Load data for all stocks for the given data key.
+        """
+        data = []
+        for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
+            data.append(getattr(stock, data_key)().loc[start:end])
 
-def load_col(col_info, data, data_cls):
-    col = col_info[0]
-    col_end_date = col_info[1]
-    if col_end_date == dt.datetime(1990, 1, 1):
-        return None
-    else:
-        col_data = pd.read_csv(f'D:/Factor_DB/db/{col}_{data}.csv', index_col=0, encoding='utf-8-sig')
-        if len(col_data) < 1:
-            return None
-        else:
-            #col_data = col_data[~col_data.index.duplicated(keep='first')]
-            if data_cls == 'prc':
-                col_data = col_data.ffill()
-            else:
-                col_data = col_data.drop_duplicates(subset='fydate', keep='last')
-                col_data = col_data[[col]]
-                if data_cls == 'inc':
-                    # get 4 data rolling sum
-                    col_data = col_data.rolling(4).sum()
-                elif data_cls == 'bal':
-                    # replace 0 with NaN, and fill NaN with previous value
-                    col_data = col_data.replace(0, pd.NA).ffill()
+        df = pd.concat(data, axis=1).sort_index()
 
-            return col_data
+        return df
 
 
 if __name__ == '__main__':
 
     dp = DataProcessor()
     dp.load_stocks(['US9898241073'])
-    dp.stocks['US9898241073'].EPS()
+    dp.stock['US9898241073'].EPS()
 
     # 1. index 선택
     index = 'RAY'
@@ -266,30 +298,11 @@ if __name__ == '__main__':
     index_master = pd.read_csv(f'D:/Factor_DB/db/master_{index}.csv', index_col=0, parse_dates=True, encoding='utf-8-sig')
     curr_index = index_master.iloc[-1].dropna()
     dp.load_stocks(curr_index.index)
-    dp.stocks[list(dp.stocks)[5]].EPS()
+    dp.stock[list(dp.stock)[5]].EPS()
 
+    # import all stock.EPS value and concat
+    eps = dp.load_data_df('closeprice')
+    #EPS = pd.concat([stock.EPS().loc['2020-01-01':] for stock in dp.stock.values()], axis=1)
     # 3. index_master의 columns에 있는 종목별로 D:/Factor_DB/db에 저장된 종목별 데이터 불러오기
     datalist = ['fyshares', 'closeprice', 'return', 'fyshares', 'dividend', 'earnings', 'bookvalue', 'totalassets']
-
-    for data in datalist:
-        # data 성질 규정
-        total = []
-        data_period = data_master[data]['period']
-        data_frq = data_master[data]['frq']
-        data_cls = data_master[data]['cls']
-
-        # Create a partial function with fixed arguments
-        partial_load_col = partial(load_col, data=data, data_cls=data_cls)
-
-        #create col_data list consisting of [col, end_date, stat]
-        col_data = []
-        for col in index_master.columns:
-            col_data.append([col, equity_master[col][data]['end'], equity_master[col][data]['stat']])
-
-        # multiprocess through index_master.columns
-        total = process_map(partial_load_col, col_data, max_workers=os.cpu_count()-1, chunksize=int(len(col_data)/1000))
-
-        # only left dataframe object
-        total = [df for df in total if df is not None]
-        total = pd.concat(total, axis=1).sort_index()
 

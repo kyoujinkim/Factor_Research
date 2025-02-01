@@ -3,7 +3,7 @@ from glob import glob
 import pandas as pd
 from src.funs import *
 from src.calcWeight import WeightBuilder
-def calc_factor_weight(country, rebal_freq):
+def calc_factor_weight(datapro, country, rebal_freq):
 
     # 1. 데이터 불러오기
     # 1-1. 주간 시세 불러오기
@@ -80,10 +80,10 @@ def calc_factor_weight(country, rebal_freq):
     weight = wb.calcWeight(factor_bd=mktval_bd
                             , listed_window=52
                             , weighting_method=weighting_method
+                            , weight_limit=0.3
                             , multiproc_partition=1)
     weight.to_csv(
         f'./weight/{country}/factor_weight/BM.csv')
-
 
     # Factor Quantile Portfolio 설정
     wb = WeightBuilder(rebal_freq=rebal_freq, startdate=startdate, enddate=None
