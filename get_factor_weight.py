@@ -3,7 +3,7 @@ from glob import glob
 import pandas as pd
 from src.funs import *
 from src.calcWeight import WeightBuilder
-def calc_factor_weight(datapro, country, rebal_freq):
+def calc_factor_weight(country, rebal_freq):
 
     # 1. 데이터 불러오기
     # 1-1. 주간 시세 불러오기

@@ -269,7 +269,14 @@ class DataProcessor(BaseData):
         """
         data = {}
         for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
-            data[stock.stock] = getattr(stock, data_key)().loc[start:end]
+            tmp = getattr(stock, data_key, None)
+            if tmp is None:
+                pass
+            elif tmp() is None:
+                pass
+            else:
+                data[stock.stock] = tmp().loc[start:end]
+
         return data
 
     def load_data_df(self, data_key: str, start: str=None, end: str=None):
@@ -278,7 +285,14 @@ class DataProcessor(BaseData):
         """
         data = []
         for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
-            data.append(getattr(stock, data_key)().loc[start:end])
+            # if data_key is not in attribute of stock, return None pd.Series
+            tmp = getattr(stock, data_key, None)
+            if tmp is None:
+                pass
+            elif tmp() is None:
+                pass
+            else:
+                data.append(tmp().loc[start:end])
 
         df = pd.concat(data, axis=1).sort_index()
 
@@ -296,8 +310,8 @@ if __name__ == '__main__':
 
     # 2. index별로 저장되어있는 index_master 불러오기
     index_master = pd.read_csv(f'D:/Factor_DB/db/master_{index}.csv', index_col=0, parse_dates=True, encoding='utf-8-sig')
-    curr_index = index_master.iloc[-1].dropna()
-    dp.load_stocks(curr_index.index)
+    curr_index = index_master
+    dp.load_stocks(curr_index.columns)
     dp.stock[list(dp.stock)[5]].EPS()
 
     # import all stock.EPS value and concat

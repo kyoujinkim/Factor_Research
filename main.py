@@ -23,7 +23,7 @@ if __name__ == '__main__':
         export_factor(country
                       , factor_list = ['BM', 'SMB', 'HML', 'MOM', 'OP', 'INV']
                       )
-
+    '''
     # 2. Calculate Expected Return
     print('Calculate Expected Return')
     end_date = None # '2024-06-30'
@@ -59,15 +59,15 @@ if __name__ == '__main__':
         ]
 
     for country_model in model_list:
-        calc_mvo_weight(*country_model)'''
+        calc_mvo_weight(*country_model)
 
-    snapdate = '2025-01-31'
+    #snapdate = '2025-01-31'
     print('Calculate Formatted Expected return')
     model_list = [
-        [snapdate, 'korea', 'sr2', 3, 60, 6, 0.2]
-        , [snapdate, 'us', 'ch4', 3, 12, 6, 0.2]
-        , [snapdate, 'japan', 'sr2', 6, 60, 6, 0.2]
-        , [snapdate, 'europe', 'capm', 6, 12, 6, 0.2]
+        [snapdate, 'korea', 'sr2', 3, 60, 2, 0.7]
+        , [snapdate, 'us', 'ch4', 3, 12, 2, 0.7]
+        , [snapdate, 'japan', 'sr2', 6, 60, 2, 0.7]
+        , [snapdate, 'europe', 'capm', 6, 12, 2, 0.7]
         ]
     for country_model in model_list:
         groupER(*country_model)
