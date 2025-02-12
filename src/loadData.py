@@ -13,6 +13,8 @@ load data 설계
 import configparser
 import os
 import json
+from glob import glob
+
 import pandas as pd
 import datetime as dt
 
@@ -60,9 +62,9 @@ class Data:
         self.cls = cls
 
     def __call__(self):
-        file_path = f'{BaseData.dbpath}/db/{self.stock}_{self.data_key}.csv'
+        file_path = f'{BaseData.dbpath}/db/{self.stock}_{self.data_key}.parquet'
         try:
-            return pd.read_csv(file_path, index_col=0, encoding='utf-8-sig', parse_dates=True)
+            return pd.read_parquet(file_path, engine='pyarrow')[[self.data_key]].rename(columns={self.data_key: self.stock})
         except FileNotFoundError:
             return f"File not found: {file_path}"
 
@@ -263,6 +265,16 @@ class DataProcessor(BaseData):
         """
         self.stock = {}
 
+    def get_attribute(self, stock, data_key, start, end):
+        """
+        Get attributes of a stock.
+        """
+        tmp = getattr(stock, data_key, None)
+        if type(tmp()) == pd.DataFrame or type(tmp()) == pd.Series:
+            return tmp().loc[start:end]
+        else:
+            return pd.DataFrame()
+
     def load_data_dict(self, data_key: str, start: str=None, end: str=None):
         """
         Load data for all stocks for the given data key.
@@ -270,12 +282,12 @@ class DataProcessor(BaseData):
         data = {}
         for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
             tmp = getattr(stock, data_key, None)
-            if tmp is None:
-                pass
-            elif tmp() is None:
-                pass
-            else:
+            if type(tmp()) == pd.DataFrame or type(tmp()) == pd.Series:
                 data[stock.stock] = tmp().loc[start:end]
+            elif type(tmp()) == str:
+                data[stock.stock] = tmp()
+            else:
+                pass
 
         return data
 
@@ -285,19 +297,38 @@ class DataProcessor(BaseData):
         """
         data = []
         for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
-            # if data_key is not in attribute of stock, return None pd.Series
             tmp = getattr(stock, data_key, None)
-            if tmp is None:
-                pass
-            elif tmp() is None:
-                pass
-            else:
+            if type(tmp()) == pd.DataFrame or type(tmp()) == pd.Series:
                 data.append(tmp().loc[start:end])
+            elif type(tmp()) == str:
+                data.append(tmp())
+            else:
+                pass
 
         df = pd.concat(data, axis=1).sort_index()
 
         return df
 
+    def load_data_query(self, data_key: str, start: str=None, end: str=None):
+        """
+        Load data for all stocks for the given data key.
+        """
+        data = []
+        for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
+            tmp = getattr(stock, data_key, None)
+            if type(tmp()) == pd.DataFrame or type(tmp()) == pd.Series:
+                data.append(tmp().loc[start:end])
+            elif type(tmp()) == str:
+                data.append(tmp())
+            else:
+                pass
+
+        df = pd.concat(data, axis=1).sort_index()
+
+        return df
+
+
+import duckdb
 
 if __name__ == '__main__':
 
@@ -309,13 +340,16 @@ if __name__ == '__main__':
     index = 'RAY'
 
     # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_csv(f'D:/Factor_DB/db/master_{index}.csv', index_col=0, parse_dates=True, encoding='utf-8-sig')
+    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
     curr_index = index_master
     dp.load_stocks(curr_index.columns)
     dp.stock[list(dp.stock)[5]].EPS()
 
     # import all stock.EPS value and concat
-    eps = dp.load_data_df('closeprice')
+    # 진짜 duckdb 성능 지린다....
+    filelist = glob('D:/Factor_DB/db/*_earnings.parquet')
+    cp = duckdb.sql(f"SELECT date, instrument, SUM(earnings) OVER (ROWS BETWEEN 3 PRECEDING AND 0 FOLLOWING) earnings FROM read_parquet({filelist}, union_by_name=true)").to_df()
+    df = cp.pivot(index='date', columns='instrument', values='earnings')
     #EPS = pd.concat([stock.EPS().loc['2020-01-01':] for stock in dp.stock.values()], axis=1)
     # 3. index_master의 columns에 있는 종목별로 D:/Factor_DB/db에 저장된 종목별 데이터 불러오기
     datalist = ['fyshares', 'closeprice', 'return', 'fyshares', 'dividend', 'earnings', 'bookvalue', 'totalassets']

@@ -64,9 +64,9 @@ if __name__ == '__main__':
     #snapdate = '2025-01-31'
     print('Calculate Formatted Expected return')
     model_list = [
-        [snapdate, 'korea', 'sr2', 3, 60, 2, 0.7]
+        [snapdate, 'korea', 'sr2', 3, 60, 2, 0.9]
         , [snapdate, 'us', 'ch4', 3, 12, 2, 0.7]
-        , [snapdate, 'japan', 'sr2', 6, 60, 2, 0.7]
+        , [snapdate, 'japan', 'sr2', 6, 60, 2, 0.9]
         , [snapdate, 'europe', 'capm', 6, 12, 2, 0.7]
         ]
     for country_model in model_list:
