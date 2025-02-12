@@ -11,18 +11,14 @@ load data 설계
 6. 데이터 로드
 '''
 import configparser
+import inspect
 import os
 import json
 from glob import glob
 
 import pandas as pd
-import datetime as dt
 
-from pandas._libs.tslibs.offsets import MonthEnd
-from tqdm import tqdm
-from tqdm.contrib.concurrent import process_map
-from sqlalchemy import create_engine
-from functools import partial
+import duckdb
 
 
 class BaseData:
@@ -122,111 +118,6 @@ class Stock(BaseData):
                 cls=None
             )
 
-    @err_handler
-    def mktpct(self):
-        '''
-        calculate mktpct of issuance
-        :return: pd.DataFrame
-        '''
-        # if mktcap data does not exist, though fyshares data exists, return shape of fyshares dataframe filled with 1
-        if self.fyshares.stat is True and self.mktcap.stat is False:
-            return pd.DataFrame(1, index=self.fyshares().index, columns=[self.stock])
-
-        shares = self.fyshares() * 10E3
-        shares[self.stock] = shares[self.stock].ffill()
-        #shares.index = shares.index - MonthEnd(1)
-        mktcap = self.mktcap() * 10E6
-        mktcap[self.stock] = mktcap[self.stock].ffill()
-
-        shares['closeprice'] = self.closeprice().reindex(shares.index, method='ffill').bfill()
-        issuecap = shares[self.stock].multiply(shares['closeprice'])
-
-        issuecap = issuecap.reindex(mktcap.index, method='ffill')
-
-        return pd.DataFrame(issuecap.divide(mktcap[self.stock]))
-
-    @err_handler
-    def EPS(self):
-        '''
-        build EPS data with stocks' earnings and shares data
-        Earnings / Shares
-        :return: pd.DataFrame
-        '''
-        earnings = self.earnings()
-        shares = self.fyshares() * 10E3
-
-        # get dataframe of date and fydate
-        earnings[self.stock] = earnings[self.stock].rolling(4).sum().ffill()
-        earnings['mktpct'] = self.mktpct().reindex(earnings.index, method='ffill')
-        earnings[self.stock] = earnings[self.stock].multiply(earnings['mktpct'])
-
-        shares[self.stock] = shares[self.stock].ffill()
-
-        shares = shares.reindex(earnings.index, method='ffill')
-
-        return pd.DataFrame(earnings[self.stock].divide(shares[self.stock]))
-
-    @err_handler
-    def EP(self):
-        '''
-        build E/P data with stocks' closeprice and EPS data
-        :return:
-        '''
-        closeprice = self.closeprice().ffill().bfill()
-        EPS = self.EPS()
-
-        # extend date index of EPS with closeprice
-        EPS = EPS.reindex(closeprice.index, method='ffill')
-
-        return pd.DataFrame(EPS.divide(closeprice))
-
-    @err_handler
-    def BPS(self):
-        '''
-        build BPS data with stocks' bookvalue and shares data
-        Bookvalue / Shares
-        :return: pd.DataFrame
-        '''
-        bookvalue = self.bookvalue()
-        shares = self.fyshares() * 10E3
-
-        # get dataframe of date and fydate
-        bookvalue[self.stock] = bookvalue[self.stock].replace(0, pd.NA).ffill()
-        bookvalue['mktpct'] = self.mktpct().reindex(bookvalue.index, method='ffill')
-        shares[self.stock] = shares[self.stock].ffill()
-
-        shares = shares.reindex(bookvalue.index, method='ffill')
-
-        return pd.DataFrame(bookvalue[self.stock].divide(shares[self.stock]))
-
-    @err_handler
-    def BP(self):
-        '''
-        build B/P data with stocks' closeprice and BPS data
-        :return:
-        '''
-        closeprice = self.closeprice().ffill().bfill()
-        BPS = self.BPS()
-
-        # extend date index of BPS with closeprice
-        BPS = BPS.reindex(closeprice.index, method='ffill')
-
-        return pd.DataFrame(BPS.divide(closeprice))
-
-    @err_handler
-    def ROE(self):
-        '''
-        build ROE data with stocks' EPS and BPS data
-        EPS / BPS
-        :return: pd.DataFrame
-        '''
-        EPS = self.EPS()
-        BPS = self.BPS()
-
-        EPS = EPS.reindex(BPS.index, method='ffill')
-
-        return pd.DataFrame(EPS.divide(BPS))
-
 
 class DataProcessor(BaseData):
     """
@@ -246,7 +137,7 @@ class DataProcessor(BaseData):
         """
         Return a list of all stocks.
         """
-        return list(self.equity_master.keys())
+        return list(self.stock.keys())
 
     def load_stocks(self, instruments: list):
         """
@@ -265,92 +156,141 @@ class DataProcessor(BaseData):
         """
         self.stock = {}
 
-    def get_attribute(self, stock, data_key, start, end):
+    def data(self, data_key: str, start: str = None, end: str = None, rolling = 0):
         """
-        Get attributes of a stock.
+        Load data from the provided data key.
+        data_key (str): The key of the data to load.
+            - "closepirce" : close price
+            - "return" : return
+            - "fyshares" : shares
+            - "dividend" : dividend
+            - "earnings" : earnings
+            - "bookvalue" : bookvalue
+            - "totalassets" : totalassets
+            - "mktcap" : market capitalization
+            - "mktpct" : market capitalization percentage
+            - "EPS" : earnings per share
+            - "EP" : earnings price ratio
+            - "BPS" : book value per share
+            - "BP" : book value price ratio
+            - "ROE" : return on equity
         """
-        tmp = getattr(stock, data_key, None)
-        if type(tmp()) == pd.DataFrame or type(tmp()) == pd.Series:
-            return tmp().loc[start:end]
+        # set cache for recursive progression
+        if not hasattr(self, "cache"):
+            setattr(self, "cache", {})
+            self.cache['depth'] = len(inspect.stack())
+        if data_key in self.cache:
+            return self.cache[data_key]
+
+        if start is None:
+            start = '1901-01-01'
+        if end is None:
+            end = '2100-12-31'
+        if rolling > 0:
+            rolling -= 1
+
+        if data_key == 'mktpct':
+            shares = (self.data('fyshares', start, end) * 10E3).ffill()
+            mktcap = (self.data('mktcap', start, end) * 10E6).ffill()
+
+            closeprice = self.data('closeprice', start, end).reindex(shares.index, method='ffill').bfill()
+            issuecap = shares.multiply(closeprice)
+
+            issuecap = issuecap.reindex(mktcap.index, method='ffill')
+
+            self.cache[data_key] = issuecap.divide(mktcap)
+
+        elif data_key == 'EPS':
+            earnings = self.data('earnings', start, end, rolling=4).ffill()
+
+            mktpct = self.data('mktpct', start, end)
+            mktpct = mktpct.reindex(earnings.index, method='ffill')
+            earnings = earnings.multiply(mktpct)
+
+            shares = (self.data('fyshares', start, end) * 10E3).ffill()
+            shares = shares.reindex(earnings.index, method='ffill')
+
+            self.cache[data_key] = earnings.divide(shares)
+
+        elif data_key == 'BPS':
+            bookvalue = self.data('bookvalue', start, end).ffill()
+
+            mktpct = self.data('mktpct', start, end)
+            mktpct = mktpct.reindex(bookvalue.index, method='ffill')
+            bookvalue = bookvalue.multiply(mktpct)
+
+            shares = (self.data('fyshares', start, end) * 10E3).ffill()
+            shares = shares.reindex(bookvalue.index, method='ffill')
+
+            self.cache[data_key] = bookvalue.divide(shares)
+
+        elif data_key == 'EP':
+            closeprice = self.data('closeprice', start, end).ffill()
+
+            EPS = self.data('EPS', start, end)
+            EPS = EPS.reindex(closeprice.index, method='ffill')
+
+            self.cache[data_key] = EPS.divide(closeprice)
+
+        elif data_key == 'BP':
+            closeprice = self.data('closeprice', start, end).ffill()
+
+            BPS = self.data('BPS', start, end)
+            BPS = BPS.reindex(closeprice.index, method='ffill')
+
+            self.cache[data_key] = BPS.divide(closeprice)
+
+        elif data_key == 'ROE':
+            EPS = self.data('EPS', start, end)
+            BPS = self.data('BPS', start, end)
+
+            EPS = EPS.reindex(BPS.index, method='ffill')
+
+            self.cache[data_key] = EPS.divide(BPS)
+
         else:
-            return pd.DataFrame()
-
-    def load_data_dict(self, data_key: str, start: str=None, end: str=None):
-        """
-        Load data for all stocks for the given data key.
-        """
-        data = {}
-        for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
-            tmp = getattr(stock, data_key, None)
-            if type(tmp()) == pd.DataFrame or type(tmp()) == pd.Series:
-                data[stock.stock] = tmp().loc[start:end]
-            elif type(tmp()) == str:
-                data[stock.stock] = tmp()
+            filelist = glob(f'{BaseData.dbpath}/db/*_{data_key}.parquet')
+            filelist = [file for file in filelist if file.split('\\')[-1].split('_')[0] in self.stock_list()]
+            if rolling > 0:
+                query = f"""SELECT date, instrument, SUM({data_key}) OVER (ROWS BETWEEN {rolling} PRECEDING AND 0 FOLLOWING) {data_key} 
+                FROM read_parquet({filelist}, union_by_name=true)
+                WHERE date BETWEEN '{start}' AND '{end}'"""
             else:
-                pass
+                query = f"""SELECT date, instrument, {data_key} 
+                FROM read_parquet({filelist}, union_by_name=true)
+                WHERE date BETWEEN '{start}' AND '{end}'"""
+            data = duckdb.sql(query).to_df()
 
-        return data
+            self.cache[data_key] = data.drop_duplicates(['date','instrument'], keep='last').pivot(index='date', columns='instrument', values=data_key)
 
-    def load_data_df(self, data_key: str, start: str=None, end: str=None):
-        """
-        Load data for all stocks for the given data key.
-        """
-        data = []
-        for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
-            tmp = getattr(stock, data_key, None)
-            if type(tmp()) == pd.DataFrame or type(tmp()) == pd.Series:
-                data.append(tmp().loc[start:end])
-            elif type(tmp()) == str:
-                data.append(tmp())
-            else:
-                pass
+        # if we arrived to final stack, delete cache and return value
+        if self.cache['depth'] == len(inspect.stack()):
+            ret_val = self.cache[data_key]
+            del self.cache
+            return ret_val
 
-        df = pd.concat(data, axis=1).sort_index()
+        return self.cache[data_key]
 
-        return df
-
-    def load_data_query(self, data_key: str, start: str=None, end: str=None):
-        """
-        Load data for all stocks for the given data key.
-        """
-        data = []
-        for stock in tqdm(self.stock.values(), desc=f'Loading {data_key}'):
-            tmp = getattr(stock, data_key, None)
-            if type(tmp()) == pd.DataFrame or type(tmp()) == pd.Series:
-                data.append(tmp().loc[start:end])
-            elif type(tmp()) == str:
-                data.append(tmp())
-            else:
-                pass
-
-        df = pd.concat(data, axis=1).sort_index()
-
-        return df
-
-
-import duckdb
 
 if __name__ == '__main__':
 
     dp = DataProcessor()
     dp.load_stocks(['US9898241073'])
-    dp.stock['US9898241073'].EPS()
 
     # 1. index 선택
     index = 'RAY'
 
     # 2. index별로 저장되어있는 index_master 불러오기
     index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
-    curr_index = index_master
+    curr_index = index_master#.iloc[-1:].dropna(axis=1)
     dp.load_stocks(curr_index.columns)
-    dp.stock[list(dp.stock)[5]].EPS()
 
-    # import all stock.EPS value and concat
-    # 진짜 duckdb 성능 지린다....
-    filelist = glob('D:/Factor_DB/db/*_earnings.parquet')
-    cp = duckdb.sql(f"SELECT date, instrument, SUM(earnings) OVER (ROWS BETWEEN 3 PRECEDING AND 0 FOLLOWING) earnings FROM read_parquet({filelist}, union_by_name=true)").to_df()
-    df = cp.pivot(index='date', columns='instrument', values='earnings')
-    #EPS = pd.concat([stock.EPS().loc['2020-01-01':] for stock in dp.stock.values()], axis=1)
-    # 3. index_master의 columns에 있는 종목별로 D:/Factor_DB/db에 저장된 종목별 데이터 불러오기
-    datalist = ['fyshares', 'closeprice', 'return', 'fyshares', 'dividend', 'earnings', 'bookvalue', 'totalassets']
+    # check time consumption for dp.data with timeit
 
+    #dp.data('ROE')
+    import timeit
+    execution_time = timeit.repeat(lambda: dp.data('ROE'), number=1, repeat=5)
+    print(f"Execution time: {execution_time} seconds")
+    #tmp = dp.data('EP', '2023-01-01')
+
+    a = 1
