@@ -282,14 +282,14 @@ if __name__ == '__main__':
 
     # 2. index별로 저장되어있는 index_master 불러오기
     index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
-    curr_index = index_master#.iloc[-1:].dropna(axis=1)
+    curr_index = index_master.iloc[-1:].dropna(axis=1)
     dp.load_stocks(curr_index.columns)
 
     # check time consumption for dp.data with timeit
 
     #dp.data('ROE')
     import timeit
-    execution_time = timeit.repeat(lambda: dp.data('ROE'), number=1, repeat=5)
+    execution_time = timeit.repeat(lambda: dp.data('ROE'), number=1, repeat=1)
     print(f"Execution time: {execution_time} seconds")
     #tmp = dp.data('EP', '2023-01-01')
 

@@ -1,22 +1,16 @@
+import itertools
+
 from src.funs import *
 from src.calcEReturn import Calculator
 
-def get_eval_df(filepath, window, reverse=False):
+def get_eval_df(filepath, window):
     c = load_pickle(filepath)
-
-    if reverse:
-        # change sign of c
-        newc = []
-        for eachc in c:
-            eachc = eachc.apply(lambda x: x * 0.693 if x > 0 else x / 0.693)
-            newc.append(-eachc)
-        c = newc
 
     p = cal.evaluate(c, window)
 
     return p.dropna()
 
-def get_eval_df_sector(filepath, sectordf, sector, window, reverse=False):
+def get_eval_df_sector(filepath, sectordf, sector, window):
     c = load_pickle(filepath)
 
     # change sign of c
@@ -24,10 +18,23 @@ def get_eval_df_sector(filepath, sectordf, sector, window, reverse=False):
     for eachc in c:
         sectorc = sectordf[eachc.index][sectordf.index<=eachc.name].iloc[-1].str[:len(sector)]
         filteredc = eachc[sectorc == sector]
-        if reverse:
-            newc.append(-filteredc)
-        else:
-            newc.append(filteredc)
+        newc.append(filteredc)
+
+    c = newc
+
+    p = cal.evaluate(c, window)
+
+    return p.dropna()
+
+def get_eval_df_size(filepath, mktdf, size, window):
+    c = load_pickle(filepath)
+
+    newc = []
+    for eachc in c:
+        sizec = pd.qcut(mktdf[eachc.index][mktdf.index<=eachc.name].iloc[-1], 3, labels=['small', 'mid', 'large'])
+        filteredc = eachc[sizec == size]
+        newc.append(filteredc)
+
     c = newc
 
     p = cal.evaluate(c, window)
@@ -35,192 +42,164 @@ def get_eval_df_sector(filepath, sectordf, sector, window, reverse=False):
     return p.dropna()
 
 if __name__ == '__main__':
-    #for country in ['us', 'korea', 'japan', 'europe']:
-    country = 'korea'
-    reverse = True
-    print(f'country: {country}, mean reverting: {reverse}')
+    #country_list = ['europe'] # ['us', 'korea', 'japan', 'europe']
+    #avgwindow_list = [6]
+    #datawindow_list = [12]
+    #iterlist = list(itertools.product(country_list, avgwindow_list, datawindow_list))
 
-    rf_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_riskfree.csv', dtype=float, index_col=0, parse_dates=True)
-    price_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_price.csv', dtype=float, index_col=0, parse_dates=True)
-    halt_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_halt.csv', dtype=float, index_col=0, parse_dates=True)
-    mkt_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_marketvalue.csv', dtype=float, index_col=0, parse_dates=True)
-    ind_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_industry.csv', dtype=str, index_col=0, parse_dates=True)
-    # ind_df의 기간을 price_bd에 맞추기
-    ind_df = ind_df.reindex(price_df.index).ffill().bfill().dropna(axis=0, how='all')
-    bv_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_bookvalue.csv', dtype=float, index_col=0, parse_dates=True)
-    bm_df = pd.read_csv(f'./output/{country}/bm/price_bm_m.csv', dtype=float, index_col=0, parse_dates=True)
-    smb_df = pd.read_csv(f'./output/{country}/bm/price_smb_m.csv', dtype=float, index_col=0, parse_dates=True)
-    hml_df = pd.read_csv(f'./output/{country}/bm/price_hml_m.csv', dtype=float, index_col=0, parse_dates=True)
-    mom_df = pd.read_csv(f'./output/{country}/bm/price_mom_m.csv', dtype=float, index_col=0, parse_dates=True)
-    op_df = pd.read_csv(f'./output/{country}/bm/price_op_m.csv', dtype=float, index_col=0, parse_dates=True)
-    inv_df = pd.read_csv(f'./output/{country}/bm/price_inv_m.csv', dtype=float, index_col=0, parse_dates=True)
+    iterlist = [
+        ['us',3,12],['europe',6,12], ['korea', 1, 60],['japan', 6, 60]
+    ]#,['us',3,12],['europe',6,12]] #['korea', 1, 60],['japan', 6, 60]
 
-    # Unify index of all data to max lower bound
-    basedate = findBaseDate(rf_df, price_df, halt_df, mkt_df, bm_df, smb_df, hml_df, mom_df, op_df, inv_df, ind_df)
-    rf_df = rf_df[rf_df.index >= basedate]
-    price_df = price_df[price_df.index >= basedate]
-    halt_df = halt_df[halt_df.index >= basedate]
-    mkt_df = mkt_df[mkt_df.index >= basedate]
-    ind_df = ind_df[ind_df.index >= basedate]
-    bm_df = bm_df[bm_df.index >= basedate]
-    # also unify index for factors
-    smb_df = smb_df[smb_df.index >= basedate]
-    hml_df = hml_df[hml_df.index >= basedate]
-    mom_df = mom_df[mom_df.index >= basedate]
-    op_df = op_df[op_df.index >= basedate]
-    inv_df = inv_df[inv_df.index >= basedate]
+    #iterlist_sector = [
+    #    ['korea', 'capm', True, 1, 36, 3]
+    #    , ['us', 'ch4', False, 3, 12, 2]
+    #    , ['europe', 'capm', False, 6, 12, 2]
+    #    , ['japan', 'capm', True, 6, 60, 2]]
+    #iterlist = [['korea', False, 1, 60]]
 
-    cal = Calculator(price=price_df, halt=halt_df, rf=rf_df, bm=bm_df)
-    #datawindow = 12  # 사용할 데이터의 window
-    #basewindow = 14  # 넉넉하게 부여
-    #c = cal.run(method='ff6', resampl='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, op=op_df, inv=inv_df, avg_window=3)
-    #save_pickle(c, f'./output/{country}/Expected_Return/ff6_3m_12m.pkl')
+    for country, avgwindow, datawindow in iterlist:
+        if avgwindow >= datawindow:
+            continue
+        #country = 'us'
+        print(f'country: {country}, avgwindow: {avgwindow} datawindow: {datawindow}')
 
+        rf_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_riskfree.csv', dtype=float, index_col=0, parse_dates=True)
+        price_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_price.csv', dtype=float, index_col=0, parse_dates=True)
+        halt_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_halt.csv', dtype=float, index_col=0, parse_dates=True)
+        mkt_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_marketvalue.csv', dtype=float, index_col=0, parse_dates=True)
+        ind_df = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_industry.csv', dtype=str, index_col=0, parse_dates=True)
+        # ind_df의 기간을 price_bd에 맞추기
+        ind_df = ind_df.reindex(price_df.index).ffill().bfill().dropna(axis=0, how='all')
+        bm_df = pd.read_csv(f'./output/{country}/bm/BM_m.csv', dtype=float, index_col=0, parse_dates=True)
+        smb_df = pd.read_csv(f'./output/{country}/bm/SMB_m.csv', dtype=float, index_col=0, parse_dates=True)
+        hml_df = pd.read_csv(f'./output/{country}/bm/HML_m.csv', dtype=float, index_col=0, parse_dates=True)
+        mom_df = pd.read_csv(f'./output/{country}/bm/MOM_m.csv', dtype=float, index_col=0, parse_dates=True)
+        op_df = pd.read_csv(f'./output/{country}/bm/OP_m.csv', dtype=float, index_col=0, parse_dates=True)
+        inv_df = pd.read_csv(f'./output/{country}/bm/INV_m.csv', dtype=float, index_col=0, parse_dates=True)
 
-    '''
-    datawindow = 12  # 사용할 데이터의 window
-    basewindow = 14  # 넉넉하게 부여
-    
-    c = cal.run(method='mean', resample='M', basewindow=basewindow, window=datawindow, avg_window=1)
-    save_pickle(c, f'./output/{country}/Expected_Return/mean_1m_12m.pkl')
-    c = cal.run(method='mean', resample='M', basewindow=basewindow, window=datawindow, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/mean_3m_12m.pkl')
+        # cai 불러오기
+        cai_bd = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_cai.csv', index_col=0, parse_dates=True)
+        cai_bd = cai_bd.reindex(price_df.index, method='bfill').ffill()
+        cai_bd = cai_bd.copy() / cai_bd.iloc[-1]
+        cai_bd = cai_bd.fillna(1)
 
-    c = cal.run(method='capm', resample='M', basewindow=basewindow, window=datawindow, avg_window=1)
-    save_pickle(c, f'./output/{country}/Expected_Return/capm_1m_12m.pkl')
-    c = cal.run(method='capm', resample='M', basewindow=basewindow, window=datawindow, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/capm_3m_12m.pkl')
+        # cai를 기준으로 share관련 지표들 수정
+        price_df *= cai_bd
 
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df,
-                avg_window=1)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_1m_12m.pkl')
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df,
-                avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_3m_12m.pkl')
+        # Unify index of all data to max lower bound
+        basedate = findBaseDate(rf_df, price_df, halt_df, mkt_df, bm_df, smb_df, hml_df, mom_df, op_df, inv_df, ind_df)
+        rf_df = rf_df[rf_df.index >= basedate]
+        price_df = price_df[price_df.index >= basedate]
+        halt_df = halt_df[halt_df.index >= basedate]
+        mkt_df = mkt_df[mkt_df.index >= basedate]
+        ind_df = ind_df[ind_df.index >= basedate]
+        bm_df = bm_df[bm_df.index >= basedate]
+        # also unify index for factors
+        smb_df = smb_df[smb_df.index >= basedate]
+        hml_df = hml_df[hml_df.index >= basedate]
+        mom_df = mom_df[mom_df.index >= basedate]
+        op_df = op_df[op_df.index >= basedate]
+        inv_df = inv_df[inv_df.index >= basedate]
 
-    c = cal.run(method='ch4', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df,
-                mom=mom_df, avg_window=1)
-    save_pickle(c, f'./output/{country}/Expected_Return/ch4_1m_12m.pkl')
-    c = cal.run(method='ch4', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df,
-                mom=mom_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ch4_3m_12m.pkl')
+        basedate = findBaseDate(rf_df, price_df, halt_df, mkt_df, bm_df)
+        rf_df = rf_df[rf_df.index >= basedate]
+        price_df = price_df[price_df.index >= basedate]
+        halt_df = halt_df[halt_df.index >= basedate]
+        mkt_df = mkt_df[mkt_df.index >= basedate]
+        bm_df = bm_df[bm_df.index >= basedate]
 
-    c = cal.run(method='ff5', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, op=op_df,
-                inv=inv_df, avg_window=1)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff5_1m_12m.pkl')
-    c = cal.run(method='ff5', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, op=op_df,
-                inv=inv_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff5_3m_12m.pkl')
+        cal = Calculator(price=price_df, halt=halt_df, rf=rf_df, bm=bm_df)
 
-    datawindow = 36  # 사용할 데이터의 window
-    basewindow = 38  # 넉넉하게 부여
+        c = cal.run(method='sr2', resample='M', window=datawindow, avg_window=avgwindow)
+        save_pickle(c, f'./output/{country}/Expected_Return/sr2_{avgwindow}m_{datawindow}m.pkl')
 
-    c = cal.run(method='mean', resample='M', basewindow=basewindow, window=datawindow, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/mean_3m_36m.pkl')
-    c = cal.run(method='mean', resample='M', basewindow=basewindow, window=datawindow, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/mean_12m_36m.pkl')
+        c = cal.run(method='mean', resample='M', window=datawindow, avg_window=avgwindow)
+        save_pickle(c, f'./output/{country}/Expected_Return/mean_{avgwindow}m_{datawindow}m.pkl')
 
-    c = cal.run(method='capm', resample='M', basewindow=basewindow, window=datawindow, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/capm_3m_36m.pkl')
-    c = cal.run(method='capm', resample='M', basewindow=basewindow, window=datawindow, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/capm_12m_36m.pkl')
+        c = cal.run(method='capm', resample='M', window=datawindow, avg_window=avgwindow)
+        save_pickle(c, f'./output/{country}/Expected_Return/capm_{avgwindow}m_{datawindow}m.pkl')
 
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df,
-                avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_3m_36m.pkl')
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df,
-                avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_12m_36m.pkl')
+        c = cal.run(method='ff3', resample='M', window=datawindow, hml=hml_df, smb=smb_df, avg_window=avgwindow)
+        save_pickle(c, f'./output/{country}/Expected_Return/ff3_{avgwindow}m_{datawindow}m.pkl')
 
-    c = cal.run(method='ch4', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df,
-                mom=mom_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ch4_3m_36m.pkl')
-    c = cal.run(method='ch4', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df,
-                mom=mom_df, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ch4_12m_36m.pkl')
+        c = cal.run(method='ff5', resample='M', window=datawindow, hml=hml_df, smb=smb_df, op=op_df, inv=inv_df, avg_window=avgwindow)
+        save_pickle(c, f'./output/{country}/Expected_Return/ff5_{avgwindow}m_{datawindow}m.pkl')
 
-    c = cal.run(method='ff5', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, op=op_df,
-                inv=inv_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff5_3m_36m.pkl')
-    c = cal.run(method='ff5', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, op=op_df,
-                inv=inv_df, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff5_12m_36m.pkl')
-
-    datawindow = 60 # 사용할 데이터의 window
-    basewindow = 62 # 넉넉하게 부여
-
-    c = cal.run(method='mean', resample='M', basewindow=basewindow, window=datawindow, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/mean_3m_60m.pkl')
-    c = cal.run(method='mean', resample='M', basewindow=basewindow, window=datawindow, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/mean_12m_60m.pkl')
-
-    c = cal.run(method='capm', resample='M', basewindow=basewindow, window=datawindow, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/capm_3m_60m.pkl')
-    c = cal.run(method='capm', resample='M', basewindow=basewindow, window=datawindow, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/capm_12m_60m.pkl')
-
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_3m_60m.pkl')
-    c = cal.run(method='ff3', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff3_12m_60m.pkl')
-
-    c = cal.run(method='ch4', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ch4_3m_60m.pkl')
-    c = cal.run(method='ch4', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ch4_12m_60m.pkl')
-
-    c = cal.run(method='ff5', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, op=op_df, inv=inv_df, avg_window=3)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff5_3m_60m.pkl')
-    c = cal.run(method='ff5', resample='M', basewindow=basewindow, window=datawindow, hml=hml_df, smb=smb_df, op=op_df, inv=inv_df, avg_window=12)
-    save_pickle(c, f'./output/{country}/Expected_Return/ff5_12m_60m.pkl')'''
-
-    '''
-    window = 1
-
-    # set mapped index of industry
-    if country == 'korea':
-        sector_class_len = 3
-    else:
-        sector_class_len = 2
-
-    map_ind = pd.read_csv(f'D:/Factor_DB/{country}/{country}_industrymap.csv', dtype=str, index_col=0)
-    map_ind.index = map_ind.index.map(str)
-    unique_ind = ind_df.iloc[-1].str[:sector_class_len].drop_duplicates().dropna().unique()
-    ind_list = map_ind.loc[unique_ind]
-
-    total_result = []
-    for ind in ind_list.index:
-        pred = get_eval_df_sector(f'./output/{country}/Expected_Return/ff5_12m_36m.pkl', ind_df, ind, window, reverse=reverse)
-        result = pred.mean()
-        result.name = ind
-        total_result.append(result)
-    pd.DataFrame(total_result).to_csv(f'./{country}ff5_12m_36m_sector.csv')
-    '''
-
-    window = 1
-
-    #mean_3m_12m = get_eval_df(f'./output/{country}/Expected_Return/mean_3m_12m.pkl', window)
-    capm_12m_60m = get_eval_df(f'./output/{country}/Expected_Return/capm_12m_60m.pkl', window)
-    #ff3_3m_12m = get_eval_df(f'./output/{country}/Expected_Return/ff3_3m_12m.pkl', window)
-    #ch4_3m_12m = get_eval_df(f'./output/{country}/Expected_Return/ch4_3m_12m.pkl', window)
-    #ff5_3m_12m = get_eval_df(f'./output/{country}/Expected_Return/ff5_3m_12m.pkl', window)
-    #ff6_3m_12m = get_eval_df(f'./output/{country}/Expected_Return/ff6_3m_12m.pkl', window)
-
-    #print('mean_3m_12m : \n', mean_3m_12m.median())
-    print('capm_3m_12m : \n', capm_12m_60m.median())
-    #print('ff3_3m_12m : \n', ff3_3m_12m.median())
-    #print('ch4_3m_12m : \n', ch4_3m_12m.median())
-    #print('ff5_3m_12m : \n', ff5_3m_12m.median())
-    #print('ff6_3m_12m : \n', ff6_3m_12m.median())
-
-    print('done')
+        c = cal.run(method='ch4', resample='M', window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, avg_window=avgwindow)
+        save_pickle(c, f'./output/{country}/Expected_Return/ch4_{avgwindow}m_{datawindow}m.pkl')
 
 
-    '''Note
-    - 보다 장기 window의 regression 베타와 장기 mean vector를 사용하면 할수록 CAPM이 단순 과거 수익률 평균보다 낮은 MSFE와 높은 IR을 기록
-    - FF3, CH4 모델은 CAPM보다 높은 MSFE와 낮은 IR을 기록
-    - FF3, CH4 모델은 장기 window의 regression 베타와 장기 mean vector를 사용하면 할수록 MSFE가 높아지고 IR이 낮아짐
-    - 다만, IC와의 관계는 불확실, 한국은 (-)의 관계가 나오지만, 미국은 (+)의 관계가 나옴
-    - 한국은 FF3 < CH4 관계가 성립되나, 미국은 다소 불확실함(MSFE 기준)
-    #하 시발 어렵다'''
+        #sr2 = get_eval_df(f'./output/{country}/Expected_Return/sr2_{avgwindow}m_{datawindow}m.pkl', 1)
+        #print(f'sr2 : ', pd.concat([sr2.mean(), sr2.median()], axis=1))
+
+        '''
+        if os.path.isfile(f'./output/{country}/Expected_Return/capm_{avgwindow}m_{datawindow}m.pkl') == False:
+            c = cal.run(method='capm', resample='M', window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, op=op_df, inv=inv_df, avg_window=avgwindow)
+            save_pickle(c, f'./output/{country}/Expected_Return/capm_{avgwindow}m_{datawindow}m.pkl')
+        if os.path.isfile(f'./output/{country}/Expected_Return/ff3_{avgwindow}m_{datawindow}m.pkl') == False:
+            c = cal.run(method='ff3', resample='M', window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, op=op_df, inv=inv_df, avg_window=avgwindow)
+            save_pickle(c, f'./output/{country}/Expected_Return/ff3_{avgwindow}m_{datawindow}m.pkl')
+        if os.path.isfile(f'./output/{country}/Expected_Return/ff5_{avgwindow}m_{datawindow}m.pkl') == False:
+            c = cal.run(method='ff5', resample='M', window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, op=op_df, inv=inv_df, avg_window=avgwindow)
+            save_pickle(c, f'./output/{country}/Expected_Return/ff5_{avgwindow}m_{datawindow}m.pkl')
+        if os.path.isfile(f'./output/{country}/Expected_Return/ch4_{avgwindow}m_{datawindow}m.pkl') == False:
+            c = cal.run(method='ch4', resample='M', window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, op=op_df, inv=inv_df, avg_window=avgwindow)
+            save_pickle(c, f'./output/{country}/Expected_Return/ch4_{avgwindow}m_{datawindow}m.pkl')
+        if os.path.isfile(f'./output/{country}/Expected_Return/mean_{avgwindow}m_{datawindow}m.pkl') == False:
+            c = cal.run(method='mean', resample='M', window=datawindow, hml=hml_df, smb=smb_df, mom=mom_df, op=op_df, inv=inv_df, avg_window=avgwindow)
+            save_pickle(c, f'./output/{country}/Expected_Return/mean_{avgwindow}m_{datawindow}m.pkl')
+        '''
+        '''
+        mean = get_eval_df(f'./output/{country}/Expected_Return/mean_{avgwindow}m_{datawindow}m.pkl', 1, reverse)
+        capm = get_eval_df(f'./output/{country}/Expected_Return/capm_{avgwindow}m_{datawindow}m.pkl', 1, reverse)
+        ff3 = get_eval_df(f'./output/{country}/Expected_Return/ff3_{avgwindow}m_{datawindow}m.pkl', 1, reverse)
+        ch4 = get_eval_df(f'./output/{country}/Expected_Return/ch4_{avgwindow}m_{datawindow}m.pkl', 1, reverse)
+        ff5 = get_eval_df(f'./output/{country}/Expected_Return/ff5_{avgwindow}m_{datawindow}m.pkl', 1, reverse)
+
+        print(f'{avgwindow}m_{datawindow}m Test Result: Mean/ Median')
+        print(f'mean : ', pd.concat([mean.mean(), mean.median()], axis=1))
+        print(f'capm : ', pd.concat([capm.mean(), capm.median()], axis=1))
+        print(f'ff3 : ', pd.concat([ff3.mean(), ff3.median()], axis=1))
+        print(f'ch4 : ', pd.concat([ch4.mean(), ch4.median()], axis=1))
+        print(f'ff5 : ', pd.concat([ff5.mean(), ff5.median()], axis=1))
+        '''
+
+        '''
+        model = 'sr2'
+        
+        if country == 'korea':
+            sectorlen = 3
+        else:
+            sectorlen = 2
+
+        sectors = ind_df.iloc[-1]
+        sectors = pd.DataFrame(set(sectors.str[:sectorlen])).dropna()
+
+        result_list = []
+        for sec in sectors[0].values:
+            result = get_eval_df_sector(f'./output/{country}/Expected_Return/{model}_{avgwindow}m_{datawindow}m.pkl', ind_df, sec, 1)
+            result_df = pd.concat([result.mean(), result.median()], axis=0)
+            result_df.name = sec
+            result_list.append(result_df)
+            print(f'{country} {sec} : ', pd.concat([result.mean(), result.median()], axis=1))
+
+        result_df = pd.concat(result_list, axis=1)
+        result_df.to_csv(f'./{country}_{model}_{avgwindow}m_{datawindow}m_sector.csv')'''
+
+
+        '''
+        model = 'sr2'
+        sizes = ['small', 'mid', 'large']
+        result_list = []
+        for size in sizes:
+            result = get_eval_df_size(f'./output/{country}/Expected_Return/{model}_{avgwindow}m_{datawindow}m.pkl', mkt_df, size, 1)
+            result_df = pd.concat([result.mean(), result.median()], axis=0)
+            result_df.name = size
+            result_list.append(result_df)
+            print(f'{country} {size} : ', pd.concat([result.mean(), result.median()], axis=1))
+
+        result_df = pd.concat(result_list, axis=1)
+        result_df.to_csv(f'./{country}_{model}_{avgwindow}m_{datawindow}m_size.csv')
+        print('done')'''
 

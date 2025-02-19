@@ -110,7 +110,7 @@ def normal_backtest(country, price_bd, div_bd, avgwindow, datawindow):
 def general_backtest(country, price_bd, div_bd):
     '''load weight'''
     bm_list = glob(f'./weight/{country}/factor_weight/BM.csv')
-    weight_list = glob(f'./weight/{country}/EquWeight_byQuantile/*sharpe*.csv')
+    weight_list = glob(f'./weight/{country}/EquWeight_byQuantile/*sharpe*0.1.csv')
     weight_list = bm_list + weight_list
 
     bt_list = []
@@ -154,7 +154,6 @@ if __name__ == "__main__":
                                parse_dates=True)
         div_bd = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_dividend.csv', dtype=float, index_col=0,
                              parse_dates=True)
-
         # consider Dividend Date, adjust dividend date
         div_bd = div_bd.shift(-1).fillna(0)
 
@@ -179,7 +178,10 @@ if __name__ == "__main__":
         #    res.prices[col].to_csv(f'./output/{country}/{col}.csv')
         #res.display()
         #plt.show()
-        res = qs.reports.html(res.prices[res.prices.columns[-2]], res.prices[res.prices.columns[-1]]
+
+        res.set_date_range(start='2024-01-01')
+
+        res = qs.reports.html(res.prices[res.prices.columns[-1]], res.prices[res.prices.columns[0]]
                         , output=f'./output/{country}/FScoeff1.html')
 
     print('done')

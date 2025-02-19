@@ -130,14 +130,6 @@ def calculate_Expected_Return_totalTS(country, model, avg_window, window, end: s
 
 if __name__ == '__main__':
     print('Calculate Total Expected Return')
-    model_list = [
-        ['korea', 'sr2', 3, 60, None, True]
-        , ['us', 'ch4', 3, 12, None, True]
-        , ['japan', 'sr2', 6, 60, None, True]
-        , ['europe', 'capm', 6, 12, None, True]
-        ]
-    for country_model in model_list:
-        calculate_Expected_Return_totalTS(*country_model)
 
     model_list = [
         ['korea', 'sr2', 3, 60, None, False]
