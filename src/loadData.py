@@ -190,8 +190,8 @@ class DataProcessor(BaseData):
             rolling -= 1
 
         if data_key == 'mktpct':
-            shares = (self.data('fyshares', start, end) * 10E3).ffill()
-            mktcap = (self.data('mktcap', start, end) * 10E6).ffill()
+            shares = (self.data('fyshares', start, end) * 1E3).ffill()
+            mktcap = (self.data('mktcap', start, end) * 1E6).ffill()
 
             closeprice = self.data('closeprice', start, end).reindex(shares.index, method='ffill').bfill()
             issuecap = shares.multiply(closeprice)
@@ -200,6 +200,15 @@ class DataProcessor(BaseData):
 
             self.cache[data_key] = issuecap.divide(mktcap)
 
+        elif data_key == 'aprice':
+            closeprice = self.data('closeprice', start, end).ffill()
+
+            split = self.data('split', start, end).ffill()
+            split = split.reindex(closeprice.index, method='ffill')
+            closeprice = closeprice.multiply(split)
+
+            self.cache[data_key] = closeprice
+
         elif data_key == 'EPS':
             earnings = self.data('earnings', start, end, rolling=4).ffill()
 
@@ -207,7 +216,23 @@ class DataProcessor(BaseData):
             mktpct = mktpct.reindex(earnings.index, method='ffill')
             earnings = earnings.multiply(mktpct)
 
-            shares = (self.data('fyshares', start, end) * 10E3).ffill()
+            shares = (self.data('fyshares', start, end) * 1E3).ffill()
+            shares = shares.reindex(earnings.index, method='ffill')
+
+            self.cache[data_key] = earnings.divide(shares)
+
+        elif data_key == 'EPSnorm':
+            earnings = self.data('earnings', start, end, rolling=4).ffill()
+
+            split = self.data('split', start, end).ffill()
+            split = split.reindex(earnings.index, method='ffill')
+            earnings = earnings.multiply(split)
+
+            mktpct = self.data('mktpct', start, end)
+            mktpct = mktpct.reindex(earnings.index, method='ffill')
+            earnings = earnings.multiply(mktpct)
+
+            shares = (self.data('fyshares', start, end) * 1E3).ffill()
             shares = shares.reindex(earnings.index, method='ffill')
 
             self.cache[data_key] = earnings.divide(shares)
@@ -219,26 +244,42 @@ class DataProcessor(BaseData):
             mktpct = mktpct.reindex(bookvalue.index, method='ffill')
             bookvalue = bookvalue.multiply(mktpct)
 
-            shares = (self.data('fyshares', start, end) * 10E3).ffill()
+            shares = (self.data('fyshares', start, end) * 1E3).ffill()
+            shares = shares.reindex(bookvalue.index, method='ffill')
+
+            self.cache[data_key] = bookvalue.divide(shares)
+
+        elif data_key == 'BPSnorm':
+            bookvalue = self.data('bookvalue', start, end).ffill()
+
+            split = self.data('split', start, end).ffill()
+            split = split.reindex(bookvalue.index, method='ffill')
+            bookvalue = bookvalue.multiply(split)
+
+            mktpct = self.data('mktpct', start, end)
+            mktpct = mktpct.reindex(bookvalue.index, method='ffill')
+            bookvalue = bookvalue.multiply(mktpct)
+
+            shares = (self.data('fyshares', start, end) * 1E3).ffill()
             shares = shares.reindex(bookvalue.index, method='ffill')
 
             self.cache[data_key] = bookvalue.divide(shares)
 
         elif data_key == 'EP':
-            closeprice = self.data('closeprice', start, end).ffill()
+            aprice = self.data('aprice', start, end).ffill()
 
-            EPS = self.data('EPS', start, end)
-            EPS = EPS.reindex(closeprice.index, method='ffill')
+            EPS = self.data('EPSnorm', start, end)
+            EPS = EPS.reindex(aprice.index, method='ffill')
 
-            self.cache[data_key] = EPS.divide(closeprice)
+            self.cache[data_key] = EPS.divide(aprice)
 
         elif data_key == 'BP':
-            closeprice = self.data('closeprice', start, end).ffill()
+            aprice = self.data('aprice', start, end).ffill()
 
-            BPS = self.data('BPS', start, end)
-            BPS = BPS.reindex(closeprice.index, method='ffill')
+            BPS = self.data('BPSnorm', start, end)
+            BPS = BPS.reindex(aprice.index, method='ffill')
 
-            self.cache[data_key] = BPS.divide(closeprice)
+            self.cache[data_key] = BPS.divide(aprice)
 
         elif data_key == 'ROE':
             EPS = self.data('EPS', start, end)
@@ -249,16 +290,27 @@ class DataProcessor(BaseData):
             self.cache[data_key] = EPS.divide(BPS)
 
         else:
-            filelist = glob(f'{BaseData.dbpath}/db/*_{data_key}.parquet')
-            filelist = [file for file in filelist if file.split('\\')[-1].split('_')[0] in self.stock_list()]
-            if rolling > 0:
-                query = f"""SELECT date, instrument, SUM({data_key}) OVER (ROWS BETWEEN {rolling} PRECEDING AND 0 FOLLOWING) {data_key} 
-                FROM read_parquet({filelist}, union_by_name=true)
-                WHERE date BETWEEN '{start}' AND '{end}'"""
+            if data_key == 'split':
+                subdata_key = 'fyshares'
             else:
-                query = f"""SELECT date, instrument, {data_key} 
-                FROM read_parquet({filelist}, union_by_name=true)
-                WHERE date BETWEEN '{start}' AND '{end}'"""
+                subdata_key = data_key
+            filelist = glob(f'{BaseData.dbpath}/db/*_{subdata_key}.parquet')
+            filelist = [file for file in filelist if file.split('\\')[-1].split('_')[0] in self.stock_list()]
+
+            query = f"""SELECT date, instrument, """
+
+            if rolling > 0:
+                query += f"""SUM({data_key}) OVER (ROWS BETWEEN {rolling} PRECEDING AND 0 FOLLOWING) {data_key} """
+            elif 'split' in data_key:
+                query += f"""{subdata_key} / (SELECT {subdata_key}
+                                        FROM read_parquet({filelist}, union_by_name=true)
+                                        WHERE date BETWEEN '{start}' AND '{end}'
+                                        ORDER BY date DESC LIMIT 1) {data_key} """
+            else:
+                query += f"""{data_key} """
+
+            query += f"""FROM read_parquet({filelist}, union_by_name=true)
+            WHERE date BETWEEN '{start}' AND '{end}'"""
             data = duckdb.sql(query).to_df()
 
             self.cache[data_key] = data.drop_duplicates(['date','instrument'], keep='last').pivot(index='date', columns='instrument', values=data_key)
@@ -275,7 +327,14 @@ class DataProcessor(BaseData):
 if __name__ == '__main__':
 
     dp = DataProcessor()
-    dp.load_stocks(['US9898241073'])
+    #dp.load_stocks(['AN9225711045'])
+    #split = dp.data('split')
+
+    dp.load_stocks(['US0378331005'])
+    ssplit = dp.data('EPSnorm')
+    rtn = dp.data('return')
+    rtn_date = pd.date_range(start=rtn.index[0], end=rtn.index[-1], freq='W-FRI')
+    rtn = rtn.reindex(rtn_date, method='nearest')
 
     # 1. index 선택
     index = 'RAY'
