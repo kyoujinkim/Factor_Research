@@ -156,7 +156,7 @@ class DataProcessor(BaseData):
         """
         self.stock = {}
 
-    def data(self, data_key: str, start: str = None, end: str = None, rolling = 0):
+    def data(self, data_key: str, start: str = None, end: str = None, rolling=0):
         """
         Load data from the provided data key.
         data_key (str): The key of the data to load.
@@ -190,130 +190,48 @@ class DataProcessor(BaseData):
             rolling -= 1
 
         if data_key == 'mktpct':
-            shares = (self.data('fyshares', start, end) * 1E3).ffill()
-            mktcap = (self.data('mktcap', start, end) * 1E6).ffill()
-
-            closeprice = self.data('closeprice', start, end).reindex(shares.index, method='ffill').bfill()
-            issuecap = shares.multiply(closeprice)
-
-            issuecap = issuecap.reindex(mktcap.index, method='ffill')
-
-            self.cache[data_key] = issuecap.divide(mktcap)
-
+            self.cache[data_key] = self.__mktpct__(start, end)
         elif data_key == 'aprice':
-            closeprice = self.data('closeprice', start, end).ffill()
-
-            split = self.data('split', start, end).ffill()
-            split = split.reindex(closeprice.index, method='ffill')
-            closeprice = closeprice.multiply(split)
-
-            self.cache[data_key] = closeprice
-
+            self.cache[data_key] = self.__aprice__(start, end)
         elif data_key == 'EPS':
-            earnings = self.data('earnings', start, end, rolling=4).ffill()
-
-            mktpct = self.data('mktpct', start, end)
-            mktpct = mktpct.reindex(earnings.index, method='ffill')
-            earnings = earnings.multiply(mktpct)
-
-            shares = (self.data('fyshares', start, end) * 1E3).ffill()
-            shares = shares.reindex(earnings.index, method='ffill')
-
-            self.cache[data_key] = earnings.divide(shares)
-
+            self.cache[data_key] = self.__EPS__(start, end)
         elif data_key == 'EPSnorm':
-            earnings = self.data('earnings', start, end, rolling=4).ffill()
-
-            split = self.data('split', start, end).ffill()
-            split = split.reindex(earnings.index, method='ffill')
-            earnings = earnings.multiply(split)
-
-            mktpct = self.data('mktpct', start, end)
-            mktpct = mktpct.reindex(earnings.index, method='ffill')
-            earnings = earnings.multiply(mktpct)
-
-            shares = (self.data('fyshares', start, end) * 1E3).ffill()
-            shares = shares.reindex(earnings.index, method='ffill')
-
-            self.cache[data_key] = earnings.divide(shares)
-
+            self.cache[data_key] = self.__EPSnorm__(start, end)
         elif data_key == 'BPS':
-            bookvalue = self.data('bookvalue', start, end).ffill()
-
-            mktpct = self.data('mktpct', start, end)
-            mktpct = mktpct.reindex(bookvalue.index, method='ffill')
-            bookvalue = bookvalue.multiply(mktpct)
-
-            shares = (self.data('fyshares', start, end) * 1E3).ffill()
-            shares = shares.reindex(bookvalue.index, method='ffill')
-
-            self.cache[data_key] = bookvalue.divide(shares)
-
+            self.cache[data_key] = self.__BPS__(start, end)
         elif data_key == 'BPSnorm':
-            bookvalue = self.data('bookvalue', start, end).ffill()
-
-            split = self.data('split', start, end).ffill()
-            split = split.reindex(bookvalue.index, method='ffill')
-            bookvalue = bookvalue.multiply(split)
-
-            mktpct = self.data('mktpct', start, end)
-            mktpct = mktpct.reindex(bookvalue.index, method='ffill')
-            bookvalue = bookvalue.multiply(mktpct)
-
-            shares = (self.data('fyshares', start, end) * 1E3).ffill()
-            shares = shares.reindex(bookvalue.index, method='ffill')
-
-            self.cache[data_key] = bookvalue.divide(shares)
-
+            self.cache[data_key] = self.__BPSnorm__(start, end)
+        elif data_key == 'DPS':
+            self.cache[data_key] = self.__DPS__(start, end)
+        elif data_key == 'DPSnorm':
+            self.cache[data_key] = self.__DPSnorm__(start, end)
         elif data_key == 'EP':
-            aprice = self.data('aprice', start, end).ffill()
-
-            EPS = self.data('EPSnorm', start, end)
-            EPS = EPS.reindex(aprice.index, method='ffill')
-
-            self.cache[data_key] = EPS.divide(aprice)
-
+            self.cache[data_key] = self.__EP__(start, end)
         elif data_key == 'BP':
-            aprice = self.data('aprice', start, end).ffill()
-
-            BPS = self.data('BPSnorm', start, end)
-            BPS = BPS.reindex(aprice.index, method='ffill')
-
-            self.cache[data_key] = BPS.divide(aprice)
-
+            self.cache[data_key] = self.__BP__(start, end)
         elif data_key == 'ROE':
-            EPS = self.data('EPS', start, end)
-            BPS = self.data('BPS', start, end)
-
-            EPS = EPS.reindex(BPS.index, method='ffill')
-
-            self.cache[data_key] = EPS.divide(BPS)
-
+            self.cache[data_key] = self.__ROE__(start, end)
+        elif data_key == 'split':
+            self.cache[data_key] = self.__split__(start, end)
         else:
-            if data_key == 'split':
-                subdata_key = 'fyshares'
-            else:
-                subdata_key = data_key
-            filelist = glob(f'{BaseData.dbpath}/db/*_{subdata_key}.parquet')
+            filelist = glob(f'{BaseData.dbpath}/db/*_{data_key}.parquet')
             filelist = [file for file in filelist if file.split('\\')[-1].split('_')[0] in self.stock_list()]
 
             query = f"""SELECT date, instrument, """
 
             if rolling > 0:
                 query += f"""SUM({data_key}) OVER (ROWS BETWEEN {rolling} PRECEDING AND 0 FOLLOWING) {data_key} """
-            elif 'split' in data_key:
-                query += f"""{subdata_key} / (SELECT {subdata_key}
-                                        FROM read_parquet({filelist}, union_by_name=true)
-                                        WHERE date BETWEEN '{start}' AND '{end}'
-                                        ORDER BY date DESC LIMIT 1) {data_key} """
             else:
                 query += f"""{data_key} """
 
             query += f"""FROM read_parquet({filelist}, union_by_name=true)
             WHERE date BETWEEN '{start}' AND '{end}'"""
+
             data = duckdb.sql(query).to_df()
 
-            self.cache[data_key] = data.drop_duplicates(['date','instrument'], keep='last').pivot(index='date', columns='instrument', values=data_key)
+            self.cache[data_key] = data.drop_duplicates(['date', 'instrument'], keep='last').pivot(index='date',
+                                                                                                   columns='instrument',
+                                                                                                   values=data_key)
 
         # if we arrived to final stack, delete cache and return value
         if self.cache['depth'] == len(inspect.stack()):
@@ -323,6 +241,151 @@ class DataProcessor(BaseData):
 
         return self.cache[data_key]
 
+    def __split__(self, start, end):
+        filelist = glob(f'{BaseData.dbpath}/db/*_fyshares.parquet')
+        filelist = [file for file in filelist if file.split('\\')[-1].split('_')[0] in self.stock_list()]
+
+        query = f"""SELECT date, instrument, """
+
+        query += f"""fyshares / (SELECT fyshares
+                                FROM read_parquet({filelist}, union_by_name=true)
+                                WHERE date BETWEEN '{start}' AND '{end}'
+                                ORDER BY date DESC LIMIT 1) split """
+
+        query += f"""FROM read_parquet({filelist}, union_by_name=true)
+        WHERE date BETWEEN '{start}' AND '{end}'"""
+
+        data = duckdb.sql(query).to_df()
+
+        return data.drop_duplicates(['date', 'instrument'], keep='last').pivot(index='date', columns='instrument', values='split')
+
+    def __mktpct__(self, start, end):
+        shares = (self.data('fyshares', start, end) * 1E3).ffill()
+        mktcap = (self.data('mktcap', start, end) * 1E6).ffill()
+
+        closeprice = self.data('closeprice', start, end).reindex(shares.index, method='ffill').bfill()
+        issuecap = shares.multiply(closeprice)
+
+        issuecap.reindex(mktcap.index, method='ffill')
+
+        return issuecap.divide(mktcap)
+
+    def __aprice__(self, start, end):
+        closeprice = self.data('closeprice', start, end).ffill()
+
+        split = self.data('split', start, end).ffill()
+        split = split.reindex(closeprice.index, method='ffill')
+        closeprice = closeprice.multiply(split)
+
+        return closeprice
+
+    def __EPS__(self, start, end):
+        earnings = self.data('earnings', start, end, rolling=4).ffill()
+
+        mktpct = self.data('mktpct', start, end)
+        mktpct = mktpct.reindex(earnings.index, method='ffill')
+        earnings = earnings.multiply(mktpct)
+
+        shares = (self.data('fyshares', start, end) * 1E3).ffill()
+        shares = shares.reindex(earnings.index, method='ffill')
+
+        return earnings.divide(shares)
+
+    def __EPSnorm__(self, start, end):
+        earnings = self.data('earnings', start, end, rolling=4).ffill()
+
+        split = self.data('split', start, end).ffill()
+        split = split.reindex(earnings.index, method='ffill')
+        earnings = earnings.multiply(split)
+
+        mktpct = self.data('mktpct', start, end)
+        mktpct = mktpct.reindex(earnings.index, method='ffill')
+        earnings = earnings.multiply(mktpct)
+
+        shares = (self.data('fyshares', start, end) * 1E3).ffill()
+        shares = shares.reindex(earnings.index, method='ffill')
+
+        return earnings.divide(shares)
+
+    def __BPS__(self, start, end):
+        bookvalue = self.data('bookvalue', start, end).ffill()
+
+        mktpct = self.data('mktpct', start, end)
+        mktpct = mktpct.reindex(bookvalue.index, method='ffill')
+        bookvalue = bookvalue.multiply(mktpct)
+
+        shares = (self.data('fyshares', start, end) * 1E3).ffill()
+        shares = shares.reindex(bookvalue.index, method='ffill')
+
+        return bookvalue.divide(shares)
+
+    def __BPSnorm__(self, start, end):
+        bookvalue = self.data('bookvalue', start, end).ffill()
+
+        split = self.data('split', start, end).ffill()
+        split = split.reindex(bookvalue.index, method='ffill')
+        bookvalue = bookvalue.multiply(split)
+
+        mktpct = self.data('mktpct', start, end)
+        mktpct = mktpct.reindex(bookvalue.index, method='ffill')
+        bookvalue = bookvalue.multiply(mktpct)
+
+        shares = (self.data('fyshares', start, end) * 1E3).ffill()
+        shares = shares.reindex(bookvalue.index, method='ffill')
+
+        return bookvalue.divide(shares)
+
+    def __DPS__(self, start, end):
+        dividend = self.data('dividend', start, end).ffill()
+
+        mktpct = self.data('mktpct', start, end)
+        mktpct = mktpct.reindex(dividend.index, method='ffill')
+        dividend = dividend.multiply(mktpct)
+
+        shares = (self.data('fyshares', start, end) * 1E3).ffill()
+        shares = shares.reindex(dividend.index, method='ffill')
+
+        return dividend.divide(shares)
+
+    def __DPSnorm__(self, start, end):
+        dividend = self.data('dividend', start, end).ffill()
+
+        split = self.data('split', start, end).ffill()
+        split = split.reindex(dividend.index, method='ffill')
+        dividend = dividend.multiply(split)
+
+        mktpct = self.data('mktpct', start, end)
+        mktpct = mktpct.reindex(dividend.index, method='ffill')
+        dividend = dividend.multiply(mktpct)
+
+        shares = (self.data('fyshares', start, end) * 1E3).ffill()
+        shares = shares.reindex(dividend.index, method='ffill')
+
+        return dividend.divide(shares)
+
+    def __EP__(self, start, end):
+        aprice = self.data('aprice', start, end).ffill()
+
+        EPS = self.data('EPSnorm', start, end)
+        EPS = EPS.reindex(aprice.index, method='ffill')
+
+        return EPS.divide(aprice)
+
+    def __BP__(self, start, end):
+        aprice = self.data('aprice', start, end).ffill()
+
+        BPS = self.data('BPSnorm', start, end)
+        BPS = BPS.reindex(aprice.index, method='ffill')
+
+        return BPS.divide(aprice)
+
+    def __ROE__(self, start, end):
+        EPS = self.data('EPS', start, end)
+        BPS = self.data('BPS', start, end)
+
+        EPS = EPS.reindex(BPS.index, method='ffill')
+
+        return EPS.divide(BPS)
 
 if __name__ == '__main__':
 
