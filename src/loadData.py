@@ -11,6 +11,7 @@ load data 설계
 6. 데이터 로드
 '''
 import configparser
+import datetime
 import inspect
 import os
 import json
@@ -19,6 +20,8 @@ from glob import glob
 import pandas as pd
 
 import duckdb
+
+from src.factorLib import momentum, investment
 
 
 class BaseData:
@@ -127,6 +130,13 @@ class DataProcessor(BaseData):
         super().__init__()
         self.stock = {}
 
+    def turnon_cache(self):
+        self.maintain_cache = True
+
+    def turnoff_cache(self):
+        self.maintain_cache = False
+        del self.cache
+
     def data_list(self):
         """
         Return a list of all data.
@@ -231,12 +241,14 @@ class DataProcessor(BaseData):
 
             self.cache[data_key] = data.drop_duplicates(['date', 'instrument'], keep='last').pivot(index='date',
                                                                                                    columns='instrument',
-                                                                                                   values=data_key)
+                                                                                                   values=data_key).ffill()
 
         # if we arrived to final stack, delete cache and return value
         if self.cache['depth'] == len(inspect.stack()):
             ret_val = self.cache[data_key]
-            del self.cache
+            if not self.maintain_cache:
+                del self.cache
+
             return ret_val
 
         return self.cache[data_key]
@@ -390,29 +402,41 @@ class DataProcessor(BaseData):
 if __name__ == '__main__':
 
     dp = DataProcessor()
+    dp.turnon_cache()
     #dp.load_stocks(['AN9225711045'])
     #split = dp.data('split')
 
-    dp.load_stocks(['US0378331005'])
-    ssplit = dp.data('EPSnorm')
-    rtn = dp.data('return')
-    rtn_date = pd.date_range(start=rtn.index[0], end=rtn.index[-1], freq='W-FRI')
-    rtn = rtn.reindex(rtn_date, method='nearest')
+    index_name = 'RAY'
+    index_master = pd.read_parquet(f'{BaseData.dbpath}/db/master_{index_name}.parquet', engine='pyarrow')
+    print(datetime.datetime.now())
 
-    # 1. index 선택
-    index = 'RAY'
+    dp.load_stocks(index_master.iloc[-1].dropna().index)
+    print(datetime.datetime.now())
 
-    # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
-    curr_index = index_master.iloc[-1:].dropna(axis=1)
-    dp.load_stocks(curr_index.columns)
+    # 1. 데이터 불러오기
+    # 1-1. 주간 시세 불러오기
+    price = dp.data('aprice').resample('W-FRI').ffill()
+    print(datetime.datetime.now())
+    # 1-2. 시장 정보 불러오기
+    rtn = dp.data('return').resample('W-FRI').nearest() / 100
+    print(datetime.datetime.now())
+    # 1-4. 시가총액 불러오기
+    mktval = dp.data('mktcap').resample('W-FRI').ffill()
+    print(datetime.datetime.now())
+    # 1-5. bookvalue(bps) 불러오기
+    bps = dp.data('BP').resample('W-FRI').ffill()
+    print(datetime.datetime.now())
+    # 1-6. earnings(eps) 불러오기
+    roe = dp.data('ROE').resample('W-FRI').ffill()
+    print(datetime.datetime.now())
+    # 1-7. totalasset 불러오기
+    ta = dp.data('totalassets').resample('W-FRI').ffill()
+    print(datetime.datetime.now())
 
-    # check time consumption for dp.data with timeit
+    dp.turnoff_cache()
 
-    #dp.data('ROE')
-    import timeit
-    execution_time = timeit.repeat(lambda: dp.data('ROE'), number=1, repeat=1)
-    print(f"Execution time: {execution_time} seconds")
-    #tmp = dp.data('EP', '2023-01-01')
-
-    a = 1
+    # 팩터 계산
+    momentum = momentum(rtn, lt=52, st=4)
+    bps = bps
+    roe = roe
+    inv_bd = investment(ta)
