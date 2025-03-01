@@ -44,7 +44,7 @@ def calc_factor_weight(dp, rebal_freq):
     momentum = flib.momentum(rtn, lt=52, st=4)
     bps = bps
     roe = roe
-    inv_bd = flib.investment(ta)
+    inv = flib.investment(ta)
 
     startdate = rtn.index[53]
 
