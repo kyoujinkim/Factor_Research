@@ -19,50 +19,86 @@ class WeightBuilder:
         self.rebal_freq = rebal_freq
         self.data_freq = data_freq
 
+    def __data__(self, data:str
+                 , start:str=None
+                 , end:str=None
+                 ):
+        if os.path.exists(f'{self.base_path}/{data}.parquet'):
+            pass
+        else:
+            if data == 'return':
+                (self.dp.data(data, start=start, end=end).resample(self.data_freq).nearest() / 100).to_parquet(f'{self.base_path}/{data}.parquet')
+            else:
+                self.dp.data(data, start=start, end=end).resample(self.data_freq).ffill().to_parquet(f'{self.base_path}/{data}.parquet')
+
+        return pd.read_parquet(f'{self.base_path}/{data}.parquet')
+
+
     def build_data(self
-                   , base_path:str
-                   , startdate=None
-                   , enddate=None
+                   , data:str
+                   , startdate:str=None
+                   , enddate:str=None
                    ):
         '''
-        build data for weight calculation
+        build data for weight calculation, since every data saved as parquet, it will be loaded from parquet if exists
         :param startdate:
         :param enddate:
         :return: True if success
         '''
-        dp = ld.DataProcessor()
-        self.index = self.index[startdate:enddate].dropna(axis=1, how='all')
-        stock_list = self.index.columns
-        dp.load_stocks(stock_list)
-
-        dp.turnon_cache()
-
-        # 1. 데이터 불러오기
-        # 1-1. 주간 시세 불러오기
-        dp.data('aprice').resample(self.data_freq).ffill().to_parquet(f'{base_path}/price.parquet')
-        # 1-2. 시장 정보 불러오기
-        (dp.data('return').resample(self.data_freq).nearest() / 100).to_parquet(f'{base_path}/rtn.parquet')
-        # 1-4. 시가총액 불러오기
-        dp.data('mktcap').resample(self.data_freq).ffill().to_parquet(f'{base_path}/mktval.parquet')
-        # 1-5. bookvalue(bps) 불러오기
-        dp.data('BP').resample(self.data_freq).ffill().to_parquet(f'{base_path}/bp.parquet')
-        # 1-6. earnings(roe) 불러오기
-        dp.data('ROE').resample(self.data_freq).ffill().to_parquet(f'{base_path}/roe.parquet')
-        # 1-7. totalasset 불러오기
-        dp.data('totalassets').resample(self.data_freq).ffill().to_parquet(f'{base_path}/ta.parquet')
-
-        dp.turnoff_cache()
+        if data == 'momentum':
+            (flib.momentum(self.__data__('return', start=startdate, end=enddate), lt=52, st=4)
+             .to_parquet(f'{self.base_path}/momentum.parquet'))
+        elif data == 'investment':
+            (flib.investment(self.__data__('totalassets', start=startdate, end=enddate))
+             .to_parquet(f'{self.base_path}/investment.parquet'))
+        else:
+            self.__data__(data, start=startdate, end=enddate)
 
         return True
 
     def run(self
             , startdate:str=None
             , enddate:str=None
+            , weighting_method:str='equal'
+            , **kwargs
             ):
-        base_path = f'./cache'
-        if os.path.exists(base_path) == False:
-            os.makedirs(base_path)
-            self.build_data(base_path, startdate, enddate)
+
+        self.dp = ld.DataProcessor()
+        self.index = self.index[startdate:enddate].dropna(axis=1, how='all')
+        stock_list = self.index.columns
+        self.dp.load_stocks(stock_list)
+        self.dp.turnon_cache()
+
+        self.base_path = kwargs.get('base_path', './cache')
+        factor = kwargs.get('factor', None)
+        weight_limit = kwargs.get('weight_limit', None)
+        rm = kwargs.get('rm', 'MV')
+        workers = kwargs.get('workers', os.cpu_count() - 1)
+        active_multiproc = kwargs.get('active_multiproc', True)
+
+        # if factor is designated, build data for factor
+        if factor == 'momentum':
+            data_list = ['momentum']
+        elif factor == 'value':
+            data_list = ['bp']
+        elif factor == 'size':
+            data_list = ['mktcap']
+        elif factor == 'investment':
+            data_list = ['investment']
+        elif factor == 'profitability':
+            data_list = ['roe']
+        else:
+            data_list = []
+
+        if weighting_method == 'mktcap':
+            data_list.append('mktcap')
+        elif weighting_method == 'optmvo':
+            data_list.append('return')
         else:
             pass
+
+        # build data
+        for data in data_list:
+            self.build_data(data, startdate, enddate)
+
 

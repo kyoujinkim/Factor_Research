@@ -11,7 +11,6 @@ load data 설계
 6. 데이터 로드
 '''
 import configparser
-import datetime
 import inspect
 import os
 import json
@@ -21,14 +20,12 @@ import pandas as pd
 
 import duckdb
 
-from src.factorLib import momentum, investment
-
 
 class BaseData:
     """
     Base class for common attributes and methods shared by Stock and Data.
     """
-    dbpath = 'D:/Factor_DB'  # Base path for database files
+    dbpath = 'C:/Users/gklb/factor_db'  # Base path for database files
 
     @staticmethod
     def load_json(file_path: str):
@@ -130,13 +127,6 @@ class DataProcessor(BaseData):
         super().__init__()
         self.stock = {}
 
-    def turnon_cache(self):
-        self.maintain_cache = True
-
-    def turnoff_cache(self):
-        self.maintain_cache = False
-        del self.cache
-
     def data_list(self):
         """
         Return a list of all data.
@@ -189,6 +179,8 @@ class DataProcessor(BaseData):
         if not hasattr(self, "cache"):
             setattr(self, "cache", {})
             self.cache['depth'] = len(inspect.stack())
+
+        data_key = data_key.lower()
         if data_key in self.cache:
             return self.cache[data_key]
 
@@ -203,23 +195,23 @@ class DataProcessor(BaseData):
             self.cache[data_key] = self.__mktpct__(start, end)
         elif data_key == 'aprice':
             self.cache[data_key] = self.__aprice__(start, end)
-        elif data_key == 'EPS':
+        elif data_key == 'eps':
             self.cache[data_key] = self.__EPS__(start, end)
-        elif data_key == 'EPSnorm':
+        elif data_key == 'epsnorm':
             self.cache[data_key] = self.__EPSnorm__(start, end)
-        elif data_key == 'BPS':
+        elif data_key == 'bps':
             self.cache[data_key] = self.__BPS__(start, end)
-        elif data_key == 'BPSnorm':
+        elif data_key == 'bpsnorm':
             self.cache[data_key] = self.__BPSnorm__(start, end)
-        elif data_key == 'DPS':
+        elif data_key == 'dps':
             self.cache[data_key] = self.__DPS__(start, end)
-        elif data_key == 'DPSnorm':
+        elif data_key == 'dpsnorm':
             self.cache[data_key] = self.__DPSnorm__(start, end)
-        elif data_key == 'EP':
+        elif data_key == 'ep':
             self.cache[data_key] = self.__EP__(start, end)
-        elif data_key == 'BP':
+        elif data_key == 'bp':
             self.cache[data_key] = self.__BP__(start, end)
-        elif data_key == 'ROE':
+        elif data_key == 'roe':
             self.cache[data_key] = self.__ROE__(start, end)
         elif data_key == 'split':
             self.cache[data_key] = self.__split__(start, end)
@@ -241,14 +233,12 @@ class DataProcessor(BaseData):
 
             self.cache[data_key] = data.drop_duplicates(['date', 'instrument'], keep='last').pivot(index='date',
                                                                                                    columns='instrument',
-                                                                                                   values=data_key).ffill()
+                                                                                                   values=data_key)
 
         # if we arrived to final stack, delete cache and return value
         if self.cache['depth'] == len(inspect.stack()):
             ret_val = self.cache[data_key]
-            if not self.maintain_cache:
-                del self.cache
-
+            del self.cache
             return ret_val
 
         return self.cache[data_key]
@@ -402,41 +392,29 @@ class DataProcessor(BaseData):
 if __name__ == '__main__':
 
     dp = DataProcessor()
-    dp.turnon_cache()
     #dp.load_stocks(['AN9225711045'])
     #split = dp.data('split')
 
-    index_name = 'RAY'
-    index_master = pd.read_parquet(f'{BaseData.dbpath}/db/master_{index_name}.parquet', engine='pyarrow')
-    print(datetime.datetime.now())
+    dp.load_stocks(['US0378331005'])
+    ssplit = dp.data('EPSnorm')
+    rtn = dp.data('return')
+    rtn_date = pd.date_range(start=rtn.index[0], end=rtn.index[-1], freq='W-FRI')
+    rtn = rtn.reindex(rtn_date, method='nearest')
 
-    dp.load_stocks(index_master.iloc[-1].dropna().index)
-    print(datetime.datetime.now())
+    # 1. index 선택
+    index = 'RAY'
 
-    # 1. 데이터 불러오기
-    # 1-1. 주간 시세 불러오기
-    price = dp.data('aprice').resample('W-FRI').ffill()
-    print(datetime.datetime.now())
-    # 1-2. 시장 정보 불러오기
-    rtn = dp.data('return').resample('W-FRI').nearest() / 100
-    print(datetime.datetime.now())
-    # 1-4. 시가총액 불러오기
-    mktval = dp.data('mktcap').resample('W-FRI').ffill()
-    print(datetime.datetime.now())
-    # 1-5. bookvalue(bps) 불러오기
-    bps = dp.data('BP').resample('W-FRI').ffill()
-    print(datetime.datetime.now())
-    # 1-6. earnings(eps) 불러오기
-    roe = dp.data('ROE').resample('W-FRI').ffill()
-    print(datetime.datetime.now())
-    # 1-7. totalasset 불러오기
-    ta = dp.data('totalassets').resample('W-FRI').ffill()
-    print(datetime.datetime.now())
+    # 2. index별로 저장되어있는 index_master 불러오기
+    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    curr_index = index_master.iloc[-1:].dropna(axis=1)
+    dp.load_stocks(curr_index.columns)
 
-    dp.turnoff_cache()
+    # check time consumption for dp.data with timeit
 
-    # 팩터 계산
-    momentum = momentum(rtn, lt=52, st=4)
-    bps = bps
-    roe = roe
-    inv_bd = investment(ta)
+    #dp.data('ROE')
+    import timeit
+    execution_time = timeit.repeat(lambda: dp.data('ROE'), number=1, repeat=1)
+    print(f"Execution time: {execution_time} seconds")
+    #tmp = dp.data('EP', '2023-01-01')
+
+    a = 1
