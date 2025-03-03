@@ -24,3 +24,30 @@ def investment(ts):
     inv = ts_mask / ts_mask.shift(52) - 1
 
     return inv
+
+def value(ts):
+    '''
+    Value 계산
+    B/P = 1 / PBR
+    :param pbr: PBR 데이터
+    :return: B/P
+    '''
+    bp = 1 / ts
+
+    return bp
+
+def size(ts):
+    '''
+    Size 계산
+    :param mktcap: 시가총액 데이터
+    :return: MktCap
+    '''
+    return 1 / ts
+
+def profitability(ts):
+    '''
+    Profitability 계산
+    :param roe: ROE 데이터
+    :return: ROE
+    '''
+    return ts

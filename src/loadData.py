@@ -14,8 +14,10 @@ import configparser
 import inspect
 import os
 import json
+import shutil
 from glob import glob
 
+import factorLib as flib
 import pandas as pd
 
 import duckdb
@@ -184,10 +186,8 @@ class DataProcessor(BaseData):
         if data_key in self.cache:
             return self.cache[data_key]
 
-        if start is None:
-            start = '1901-01-01'
-        if end is None:
-            end = '2100-12-31'
+        start, end = self.__proc_na_date(start, end)
+
         if rolling > 0:
             rolling -= 1
 
@@ -242,6 +242,81 @@ class DataProcessor(BaseData):
             return ret_val
 
         return self.cache[data_key]
+
+    def build_data(self
+                   , cache_path:str
+                   , data:str
+                   , start:str=None
+                   , end:str=None
+                   , data_freq:str='W-FRI'
+                   ):
+        '''
+        build data for weight calculation, since every data saved as parquet, it will be loaded from parquet if exists
+        :param start:
+        :param end:
+        :return: True if success
+        '''
+        os.makedirs(cache_path, exist_ok=True)
+
+        start_m, end = self.__proc_na_date(start, end, 53)
+
+        if data == 'momentum':
+            (flib.momentum(
+                self.__cache_data__(cache_path, 'return', start_m, end, data_freq)
+                , lt=52, st=4)[start:end]
+             .to_parquet(f'{cache_path}/momentum.parquet'))
+        elif data == 'investment':
+            (flib.investment(
+                self.__cache_data__(cache_path, 'totalassets', start_m, end, data_freq)
+            )[start:end]
+             .to_parquet(f'{cache_path}/investment.parquet'))
+        elif data == 'value':
+            (flib.value(
+                self.__cache_data__(cache_path, 'bp', start_m, end, data_freq)
+            )[start:end]
+             .to_parquet(f'{cache_path}/value.parquet'))
+        elif data == 'size':
+            (flib.size(
+                self.__cache_data__(cache_path, 'mktcap', start_m, end, data_freq)
+            )[start:end]
+             .to_parquet(f'{cache_path}/size.parquet'))
+        elif data == 'profitability':
+            (flib.profitability(
+                self.__cache_data__(cache_path, 'roe', start_m, end, data_freq)
+            )[start:end]
+             .to_parquet(f'{cache_path}/profitability.parquet'))
+        else:
+            self.__cache_data__(cache_path, data, start_m, end, data_freq)[start:end]
+
+        return True
+
+    def __proc_na_date(self, start:str, end:str, margin_week:int=0):
+        if start is None:
+            start = '1901-01-01'
+        else:
+            start = pd.to_datetime(start) - pd.DateOffset(weeks=margin_week)
+            start = start.strftime('%Y-%m-%d')
+        if end is None:
+            end = '2100-12-31'
+
+        return start, end
+
+    def __cache_data__(self
+                       , cache_path:str
+                       , data:str
+                       , start:str
+                       , end:str
+                       , data_freq:str
+                       ):
+        if os.path.exists(f'{cache_path}/{data}.parquet'):
+            pass
+        else:
+            if data == 'return':
+                (self.data(data, start=start, end=end).resample(data_freq).nearest() / 100).to_parquet(f'{cache_path}/{data}.parquet')
+            else:
+                self.data(data, start=start, end=end).resample(data_freq).ffill().to_parquet(f'{cache_path}/{data}.parquet')
+
+        return pd.read_parquet(f'{cache_path}/{data}.parquet')
 
     def __split__(self, start, end):
         filelist = glob(f'{BaseData.dbpath}/db/*_fyshares.parquet')
@@ -392,29 +467,16 @@ class DataProcessor(BaseData):
 if __name__ == '__main__':
 
     dp = DataProcessor()
-    #dp.load_stocks(['AN9225711045'])
-    #split = dp.data('split')
-
-    dp.load_stocks(['US0378331005'])
-    ssplit = dp.data('EPSnorm')
-    rtn = dp.data('return')
-    rtn_date = pd.date_range(start=rtn.index[0], end=rtn.index[-1], freq='W-FRI')
-    rtn = rtn.reindex(rtn_date, method='nearest')
 
     # 1. index 선택
     index = 'RAY'
 
     # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    index_master = pd.read_parquet(f'C:/Users/gklb/factor_db/members/master_{index}.parquet', engine='pyarrow')
     curr_index = index_master.iloc[-1:].dropna(axis=1)
     dp.load_stocks(curr_index.columns)
 
-    # check time consumption for dp.data with timeit
-
-    #dp.data('ROE')
-    import timeit
-    execution_time = timeit.repeat(lambda: dp.data('ROE'), number=1, repeat=1)
-    print(f"Execution time: {execution_time} seconds")
-    #tmp = dp.data('EP', '2023-01-01')
-
+    shutil.rmtree('./cache')
+    dp.build_data('./cache', 'momentum', '2020-01-01', '2025-01-01')
+    dp.build_data('./cache', 'aprice', '2020-01-01', '2025-01-01')
     a = 1
