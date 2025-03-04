@@ -17,7 +17,7 @@ import json
 import shutil
 from glob import glob
 
-import factorLib as flib
+import src.factorLib as flib
 import pandas as pd
 
 import duckdb
@@ -27,7 +27,7 @@ class BaseData:
     """
     Base class for common attributes and methods shared by Stock and Data.
     """
-    dbpath = 'C:/Users/gklb/factor_db'  # Base path for database files
+    dbpath = 'D:/Factor_DB'  # Base path for database files
 
     @staticmethod
     def load_json(file_path: str):
@@ -128,6 +128,13 @@ class DataProcessor(BaseData):
     def __init__(self):
         super().__init__()
         self.stock = {}
+
+    def turnon_cache(self):
+        self.maintain_cache = True
+
+    def turnoff_cache(self):
+        self.maintain_cache = False
+        del self.cache
 
     def data_list(self):
         """
@@ -238,7 +245,9 @@ class DataProcessor(BaseData):
         # if we arrived to final stack, delete cache and return value
         if self.cache['depth'] == len(inspect.stack()):
             ret_val = self.cache[data_key]
-            del self.cache
+            if not self.maintain_cache:
+                del self.cache
+
             return ret_val
 
         return self.cache[data_key]
@@ -480,3 +489,7 @@ if __name__ == '__main__':
     dp.build_data('./cache', 'momentum', '2020-01-01', '2025-01-01')
     dp.build_data('./cache', 'aprice', '2020-01-01', '2025-01-01')
     a = 1
+
+    a=pd.date_range(start='2000-01-01', end='2025-02-28', freq='w-fri')
+    # set a as monthly
+    pd.Series(a, index=a).resample('M').nearest()
