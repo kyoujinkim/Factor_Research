@@ -321,7 +321,7 @@ class DataProcessor(BaseData):
             pass
         else:
             if data == 'return':
-                (self.data(data, start=start, end=end).resample(data_freq).nearest() / 100).to_parquet(f'{cache_path}/{data}.parquet')
+                (self.data(data, start=start, end=end).resample(data_freq).ffill() / 100).to_parquet(f'{cache_path}/{data}.parquet')
             else:
                 self.data(data, start=start, end=end).resample(data_freq).ffill().to_parquet(f'{cache_path}/{data}.parquet')
 
