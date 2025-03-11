@@ -62,6 +62,7 @@ class WeightBuilder:
         path, pdate, code_list, factor, weighting_method, weight_limit, rm = var
 
         code_list = WeightBuilder.__filter_by_date__(code_list, path, 'return', pdate, 52)
+        code_list = WeightBuilder.__filter_by__(code_list, path, 'mktcap', pdate, 100)
 
         return code_list
 
@@ -77,15 +78,36 @@ class WeightBuilder:
 
         sdate = pdate - pd.DateOffset(weeks=window)
 
-        data = WeightBuilder.__load_db__(path, data, sdate, pdate)
-
-        len(data)
+        db = WeightBuilder.__load_db__(code_list, path, data, sdate, pdate)
+        code_list = db.dropna(axis=1).columns
 
         return code_list
 
+    @staticmethod
+    def __filter_by__(code_list, path:str, data:str, pdate, n:int=-1):
+        '''
+        filter data by market value
+        :param path:
+        :param data:
+        :param window:
+        :return:
+        '''
+        if n == -1:
+            return code_list
+
+        sdate = pdate - pd.DateOffset(weeks=52)
+
+        db = WeightBuilder.__load_db__(code_list, path, data, sdate, pdate, order='DESC', limit=1)
+        db = db.dropna(axis=1)
+
+        if len(db) == 0:
+            return []
+        else:
+            code_list = db.sort_values()[:n]
+            return
 
     @staticmethod
-    def __load_db__(path:str, data:str, start:str, end:str):
+    def __load_db__(code_list, path:str, data:str, start:str, end:str, **kwargs):
         '''
         load data from db
         :param path:
@@ -94,14 +116,23 @@ class WeightBuilder:
         :param end:
         :return:
         '''
-        query = f"""SELECT {code_list}
+        order = kwargs.get('order', 'ASC')
+        limit = kwargs.get('limit', 'NULL')
+
+        line_query = f"SELECT * FROM '{path}/{data}.parquet' LIMIT 1"
+        line_data = duckdb.sql(line_query).to_df()
+
+        valid_columns = [col for col in code_list if col in line_data.columns]
+
+        query = f"""SELECT {', '.join(valid_columns)}, date
         FROM '{path}/{data}.parquet'
         WHERE date BETWEEN '{start}' AND '{end}'
-        ORDER BY date ASC       
+        ORDER BY date {order}
+        LIMIT {limit}
         """
-        data = duckdb.sql(query).to_df()
+        result = duckdb.sql(query).to_df().set_index('date')
 
-        return data
+        return result
 
     @staticmethod
     def __proc_na_date(start:str, end:str, margin_week:int=0):
@@ -128,7 +159,7 @@ if __name__ == '__main__':
     index = 'RAY'
 
     # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    index_master = pd.read_parquet(f'C:/Users/gklb/factor_db/members/master_{index}.parquet', engine='pyarrow')
     #curr_index = index_master.iloc[-1:].dropna(axis=1)
     dp.load_stocks(index_master.columns)
 
@@ -156,6 +187,8 @@ if __name__ == '__main__':
         data_list.append('return')
     else:
         pass
+
+    data_list.append('mktcap')
 
     # build data
     for data in tqdm(data_list):

@@ -27,7 +27,7 @@ class BaseData:
     """
     Base class for common attributes and methods shared by Stock and Data.
     """
-    dbpath = 'D:/Factor_DB'  # Base path for database files
+    dbpath = 'C:/Users/gklb/factor_db'  # Base path for database files
 
     @staticmethod
     def load_json(file_path: str):
