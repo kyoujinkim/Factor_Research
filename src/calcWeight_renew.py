@@ -8,6 +8,9 @@ from tqdm.contrib.concurrent import process_map
 
 import src.loadData as ld
 
+# Disable DuckDB's progress bar
+duckdb.sql("PRAGMA enable_progress_bar=false")
+
 class WeightBuilder:
     def __init__(self
                  , index:pd.DataFrame
@@ -26,13 +29,8 @@ class WeightBuilder:
     def run(self
             , start:str=None
             , end:str=None
-            , weighting_method:str='equal'
             , **kwargs
             ):
-        self.base_path = kwargs.get('base_path', './cache')
-        factor = kwargs.get('factor', None)
-        weight_limit = kwargs.get('weight_limit', None)
-        rm = kwargs.get('rm', 'MV')
         workers = kwargs.get('workers', os.cpu_count() - 1)
         active_multiproc = kwargs.get('active_multiproc', True)
 
@@ -43,28 +41,66 @@ class WeightBuilder:
         port_dates = pd.date_range(start=start, end=end, freq=self.data_freq)
         port_dates = pd.Series(port_dates, index=port_dates).resample(self.rebal_freq).last()
         # set list of variable to process in parallel
-        # var = [pdate, factor, weighting_method, weight_limit, rm]
-        var = [(self.base_path, pdate, self.index.loc[:pdate].iloc[-1].dropna().index, factor, weighting_method, weight_limit, rm) for pdate in port_dates]
+        var = [
+            {
+            'pdate':pdate
+            , 'code_list':self.index.loc[:pdate].iloc[-1].dropna().index
+            , **kwargs
+            }
+            for pdate in port_dates]
 
         if active_multiproc:
-            weights = process_map(self.__calc_weight__, var, max_workers=workers)
+            weights = process_map(WeightBuilder.__calc_weight__, var, max_workers=workers)
         else:
-            weights = [self.__calc_weight__(v) for v in var]
+            weights = [WeightBuilder.__calc_weight__(v) for v in var]
 
-        return weights
+        return pd.concat(weights,axis=0)
 
     @staticmethod
     def __calc_weight__(var):
         '''
-        :param var: [pdate, factor, weighting_method, weight_limit, rm]
+        :param var: [path, pdate, factor, weighting_method, weight_limit, rm]
         :return: weight for pdate
         '''
-        path, pdate, code_list, factor, weighting_method, weight_limit, rm = var
+        path = var.get('base_path', './cache')
+        pdate = var.get('pdate', None)
+        code_list = var.get('code_list', [])
+        factor = var.get('factor', None)
+        mktcap_n = var.get('mktcap_n', -1)
+        factor_n = var.get('factor_n', -1)
+        weighting_method = var.get('weighting_method', 'equal')
+        weight_limit = var.get('weight_limit', None)
 
-        code_list = WeightBuilder.__filter_by_date__(code_list, path, 'return', pdate, 52)
-        code_list = WeightBuilder.__filter_by__(code_list, path, 'mktcap', pdate, 100)
+        if len(code_list)>0:
+            code_list, _ = WeightBuilder.__filter_by_date__(code_list, path, 'return', pdate, 52)
+        if len(code_list)>0:
+            code_list, mktcap_db = WeightBuilder.__filter_by__(code_list, path, 'mktcap', pdate, mktcap_n)
+        if len(code_list)>0 and factor:
+            code_list, factor_db = WeightBuilder.__filter_by__(code_list, path, factor, pdate, factor_n)
 
-        return code_list
+        if len(code_list)==0:
+            w = pd.DataFrame(columns=[pdate])
+
+        if weighting_method == 'equal':
+            w = WeightBuilder.__weight_by__(code_list, 'equal')
+        elif weighting_method == 'mktcap':
+            w = WeightBuilder.__weight_by__(code_list, 'weight', mktcap_db)
+        elif weighting_method == 'factor':
+            w = WeightBuilder.__weight_by__(code_list, 'weight', factor_db)
+
+        w.columns = [pdate]
+
+        return w.T
+
+    @staticmethod
+    def __weight_by__(code_list, method, db=None):
+        if method == 'equal':
+            w = pd.DataFrame(1 / len(code_list), index=code_list, columns=['weight'])
+        elif method == 'weight':
+            w = db[code_list]
+            w = w / w.sum()
+
+        return w.fillna(0)
 
     @staticmethod
     def __filter_by_date__(code_list, path:str, data:str, pdate, window:int=52):
@@ -79,9 +115,9 @@ class WeightBuilder:
         sdate = pdate - pd.DateOffset(weeks=window)
 
         db = WeightBuilder.__load_db__(code_list, path, data, sdate, pdate)
-        code_list = db.dropna(axis=1).columns
+        code_list = db.dropna(axis=1).columns.to_list()
 
-        return code_list
+        return code_list, db
 
     @staticmethod
     def __filter_by__(code_list, path:str, data:str, pdate, n:int=-1):
@@ -92,19 +128,44 @@ class WeightBuilder:
         :param window:
         :return:
         '''
-        if n == -1:
-            return code_list
 
-        sdate = pdate - pd.DateOffset(weeks=52)
-
+        sdate = pdate - pd.DateOffset(weeks=4)
         db = WeightBuilder.__load_db__(code_list, path, data, sdate, pdate, order='DESC', limit=1)
         db = db.dropna(axis=1)
 
         if len(db) == 0:
-            return []
+            return [], None
         else:
-            code_list = db.sort_values()[:n]
-            return
+            code_list = WeightBuilder.__filter_n__(n, db)
+            code_list = code_list.columns.to_list()
+            return code_list, db
+
+    @staticmethod
+    def __filter_n__(n, db):
+        if type(n) == list:
+            # if top_n is int, calculate top and bottom
+            if type(n[0]) == int:
+                top = n[0]
+                bottom = n[1]
+            # if top_n is float, calculate top and bottom
+            elif type(n[0]) == float:
+                top = min(int(n[0] * len(db)), len(db) / 2)
+                bottom = min(int(n[1] * len(db)), len(db) / 2)
+            else:
+                raise ValueError('element of top_n(top, bottom) must be int or float')
+            code_list = db.sort_values()[top:bottom]
+        elif type(n) == int:
+            if n == -1:
+                code_list = db
+            else:
+                code_list = db.sort_values()[:n]
+        elif type(n) == float:
+            top = int(n * len(db))
+            code_list = db.sort_values()[:top]
+        else:
+            raise ValueError('top n must be int or float or list')
+
+        return code_list
 
     @staticmethod
     def __load_db__(code_list, path:str, data:str, start:str, end:str, **kwargs):
@@ -195,4 +256,12 @@ if __name__ == '__main__':
         dp.build_data(bpath, data, None, None)
 
     wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
-    wb.run(start=None, end=None, weighting_method=weighting_method, factor=factor, base_path=bpath, active_multiproc=False)
+    w = wb.run(start='2024-06-30'
+               , end=None
+               , weighting_method=weighting_method
+               , factor=factor
+               , base_path=bpath
+               , workers=9
+               , active_multiproc=True)
+
+    w.to_csv('tmp.csv')

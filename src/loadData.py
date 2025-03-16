@@ -323,7 +323,7 @@ class DataProcessor(BaseData):
             if data == 'return':
                 (self.data(data, start=start, end=end).resample(data_freq).ffill() / 100).to_parquet(f'{cache_path}/{data}.parquet')
             else:
-                self.data(data, start=start, end=end).resample(data_freq).ffill().to_parquet(f'{cache_path}/{data}.parquet')
+                self.data(data, start=start, end=end).ffill().resample(data_freq).last().to_parquet(f'{cache_path}/{data}.parquet')
 
         return pd.read_parquet(f'{cache_path}/{data}.parquet')
 
