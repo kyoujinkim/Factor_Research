@@ -6,12 +6,15 @@ import pandas as pd
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 
+from src.smman import SharedMemoryManager as smm
 import src.loadData as ld
 
 # Disable DuckDB's progress bar
 duckdb.sql("PRAGMA enable_progress_bar=false")
 
 class WeightBuilder:
+    shared_mem_managers = {}
+
     def __init__(self
                  , index:pd.DataFrame
                  , rebal_freq:str='m'
@@ -180,20 +183,23 @@ class WeightBuilder:
         order = kwargs.get('order', 'ASC')
         limit = kwargs.get('limit', 'NULL')
 
-        line_query = f"SELECT * FROM '{path}/{data}.parquet' LIMIT 1"
-        line_data = duckdb.sql(line_query).to_df()
+        file_path = f"{path}/{data}.parquet"
 
-        valid_columns = [col for col in code_list if col in line_data.columns]
+        # Load file into shared memory if not already loaded
+        if file_path not in WeightBuilder.shared_mem_managers:
+            WeightBuilder.shared_mem_managers[file_path] = smm(file_path)
+            WeightBuilder.shared_mem_managers[file_path].load_to_shared_memory()
 
-        query = f"""SELECT {', '.join(valid_columns)}, date
-        FROM '{path}/{data}.parquet'
-        WHERE date BETWEEN '{start}' AND '{end}'
-        ORDER BY date {order}
-        LIMIT {limit}
-        """
-        result = duckdb.sql(query).to_df().set_index('date')
+        # Read data from shared memory
+        df = WeightBuilder.shared_mem_managers[file_path].read_from_shared_memory()
 
-        return result
+        # Filter by date range
+        df = df.loc[start:end]
+
+        valid_columns = [col for col in code_list if col in df.columns]
+        df = df[valid_columns]
+
+        return df
 
     @staticmethod
     def __proc_na_date(start:str, end:str, margin_week:int=0):
@@ -220,13 +226,13 @@ if __name__ == '__main__':
     index = 'RAY'
 
     # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'C:/Users/gklb/factor_db/members/master_{index}.parquet', engine='pyarrow')
+    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
     #curr_index = index_master.iloc[-1:].dropna(axis=1)
     dp.load_stocks(index_master.columns)
 
     bpath = './cache/us'
-    shutil.rmtree(bpath, ignore_errors=True)
-    os.makedirs(bpath, exist_ok=True)
+    #shutil.rmtree(bpath, ignore_errors=True)
+    #os.makedirs(bpath, exist_ok=True)
 
     # if factor is designated, build data for factor
     if factor == 'momentum':
@@ -252,8 +258,8 @@ if __name__ == '__main__':
     data_list.append('mktcap')
 
     # build data
-    for data in tqdm(data_list):
-        dp.build_data(bpath, data, None, None)
+    #for data in tqdm(data_list):
+    #    dp.build_data(bpath, data, None, None)
 
     wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
     w = wb.run(start='2024-06-30'
@@ -261,7 +267,7 @@ if __name__ == '__main__':
                , weighting_method=weighting_method
                , factor=factor
                , base_path=bpath
-               , workers=9
+               , workers=3
                , active_multiproc=True)
 
     w.to_csv('tmp.csv')

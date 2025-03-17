@@ -27,7 +27,7 @@ class BaseData:
     """
     Base class for common attributes and methods shared by Stock and Data.
     """
-    dbpath = 'C:/Users/gklb/factor_db'  # Base path for database files
+    dbpath = 'D:/Factor_DB'  # Base path for database files
 
     @staticmethod
     def load_json(file_path: str):
@@ -134,7 +134,10 @@ class DataProcessor(BaseData):
 
     def turnoff_cache(self):
         self.maintain_cache = False
-        del self.cache
+        try:
+            del self.cache
+        except:
+            pass
 
     def data_list(self):
         """

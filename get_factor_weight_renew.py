@@ -1,9 +1,10 @@
+import shutil
 from glob import glob
 
 import pandas as pd
 from src.funs import *
 import src.factorLib as flib
-from src.calcWeight import WeightBuilder
+from src.calcWeight_2v import WeightBuilder
 import src.loadData as ld
 
 
@@ -15,183 +16,53 @@ def reindex_all(main, *args):
     return main, args
 
 
-def calc_factor_weight(dp, rebal_freq):
+if __name__ == '__main__':
 
     dp = ld.DataProcessor()
     dp.turnon_cache()
-    index_name = 'RAY'
-    index_master = pd.read_parquet(f'{ld.BaseData.dbpath}/db/master_{index_name}.parquet', engine='pyarrow')
 
+    # 1. index 선택
+    index = 'RAY'
+    weighting_method = 'equal'
+
+    # 2. index별로 저장되어있는 index_master 불러오기
+    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    #curr_index = index_master.iloc[-1:].dropna(axis=1)
     dp.load_stocks(index_master.columns)
 
-    # 1. 데이터 불러오기
-    # 1-1. 주간 시세 불러오기
-    price = dp.data('aprice').resample('W-FRI').ffill()
-    # 1-2. 시장 정보 불러오기
-    rtn = dp.data('return').resample('W-FRI').nearest() / 100
-    # 1-4. 시가총액 불러오기
-    mktval = dp.data('mktcap').resample('W-FRI').ffill()
-    # 1-5. bookvalue(bps) 불러오기
-    bps = dp.data('BP').resample('W-FRI').ffill()
-    # 1-6. earnings(eps) 불러오기
-    roe = dp.data('ROE').resample('W-FRI').ffill()
-    # 1-7. totalasset 불러오기
-    ta = dp.data('totalassets').resample('W-FRI').ffill()
+    bpath = './cache/us'
+    #shutil.rmtree(bpath, ignore_errors=True)
+    #os.makedirs(bpath, exist_ok=True)
+
+
+    factor_list = ['momentum', 'value', 'size', 'investment', 'profitability']
+    data_list = ['mktcap']
+    for factor in factor_list:
+        # if factor is designated, build data for factor
+        data_list.append(factor)
+
+    if weighting_method == 'optmvo':
+        data_list.append('return')
+    else:
+        pass
+
+    data_list = list(set(data_list))
+
+    # build data
+    #for data in tqdm(data_list):
+    #    dp.build_data(bpath, data, None, None)
 
     dp.turnoff_cache()
 
-    # 팩터 계산
-    momentum = flib.momentum(rtn, lt=52, st=4)
-    bps = bps
-    roe = roe
-    inv = flib.investment(ta)
+    wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
 
-    startdate = rtn.index[53]
+    for factor in factor_list:
+        w = wb.run(start=None
+                   , end=None
+                   , weighting_method=weighting_method
+                   , factor=factor
+                   , base_path=bpath
+                   , workers=os.cpu_count() - 3
+                   , active_multiproc=True)
 
-    # BM portfolio 계산
-    weighting_method = 'mktval'
-    print(f'Calculating {country}+BM+{rebal_freq}')
-    wb = WeightBuilder(rebal_freq=rebal_freq, startdate=startdate, enddate=None
-                       , mktval_top_n=-1, factor_top_n=-1
-                       , price_bd=price, market_bd=market_bd, halt_bd=halt_bd, mktval_bd=mktval_bd
-                          )
-    weight = wb.calcWeight(factor_bd=mktval_bd
-                            , listed_window=52
-                            , weighting_method=weighting_method
-                            , weight_limit=0.3
-                            , multiproc_partition=1)
-    weight.to_csv(
-        f'./weight/{country}/factor_weight/BM.csv')
-
-    # Factor Quantile Portfolio 설정
-    wb = WeightBuilder(rebal_freq=rebal_freq, startdate=startdate, enddate=None
-                       , mktval_top_n=-1, factor_top_n=0.2
-                       , price_bd=price_bd, market_bd=market_bd, halt_bd=halt_bd, mktval_bd=mktval_bd
-                       )
-
-    weighting_method = 'equal+LS'
-
-    # HML portfolio 계산
-    print(f'Calculating {country}+HML+{rebal_freq}')
-    weight = wb.calcWeight(factor_bd=bp_bd
-                           , listed_window=52
-                           , weighting_method=weighting_method
-                           , multiproc_partition=1)
-    weight.to_csv(
-        f'./weight/{country}/factor_weight/HML.csv')
-
-    # SMB portfolio 계산
-    print(f'Calculating {country}+SMB+{rebal_freq}')
-    weight = wb.calcWeight(factor_bd=-mktval_bd
-                           , listed_window=52
-                           , weighting_method=weighting_method
-                           , multiproc_partition=1)
-    weight.to_csv(
-        f'./weight/{country}/factor_weight/SMB.csv')
-
-    # momentum portfolio 계산
-    print(f'Calculating {country}+MOM+{rebal_freq}')
-    weight = wb.calcWeight(factor_bd=momentum_bd
-                           , listed_window=52
-                           , weighting_method=weighting_method
-                           , multiproc_partition=1)
-    weight.to_csv(
-        f'./weight/{country}/factor_weight/MOM.csv')
-
-    # Operating Profitability portfolio 계산
-    print(f'Calculating {country}+OP+{rebal_freq}')
-    weight = wb.calcWeight(factor_bd=op_bd
-                           , listed_window=52
-                           , weighting_method=weighting_method
-                           , multiproc_partition=1)
-    weight.to_csv(
-        f'./weight/{country}/factor_weight/OP.csv')
-
-    # Investment portfolio 계산
-    print(f'Calculating {country}+INV+{rebal_freq}')
-    weight = wb.calcWeight(factor_bd=-inv_bd
-                           , listed_window=52
-                           , weighting_method=weighting_method
-                           , multiproc_partition=1)
-    weight.to_csv(
-        f'./weight/{country}/factor_weight/INV.csv')
-    print('Process Finished')
-
-def calc_mvo_weight(snapdate, country, rebal_freq, model, avgwindow, datawindow, weightlimit=0.1):
-    # 1. 데이터 불러오기
-    # 1-1. 주간 시세 불러오기
-    price_bd = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_price.csv', dtype=float, index_col=0,
-                           parse_dates=True)
-    if country == 'us':  # drop game stop equity, since it's too volatile
-        price_bd = price_bd.drop('US36467W1099', axis=1)
-    # 1-2. 시장 정보 불러오기
-    market_bd = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_market.csv', dtype=str, index_col=0,
-                            parse_dates=True)
-    # 1-3. 거래정지 여부 불러오기
-    halt_bd = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_halt.csv', dtype=float, index_col=0,
-                          parse_dates=True)
-    # 1-4. 시가총액 불러오기
-    mktval_bd = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_marketvalue.csv', dtype=float, index_col=0,
-                            parse_dates=True)
-    # cai 불러오기
-    cai_bd = pd.read_csv(f'D:/Factor_DB/{country}/{country}_equity_cai.csv', index_col=0, parse_dates=True)
-    cai_bd = cai_bd.reindex(price_bd.index, method='bfill').ffill()
-    cai_bd = cai_bd.copy() / cai_bd.iloc[-1]
-    cai_bd = cai_bd.fillna(1)
-
-    # cai를 기준으로 share관련 지표들 수정
-    price_bd *= cai_bd
-
-    path = f'./output/{country}/Expected_Return/{model}_{avgwindow}m_{datawindow}m_snapshot{snapdate}.csv'
-
-    name = path.split('\\')[-1].split('/')[-1].split('_snapshot')[0]
-    # 2. 예상수익률 불러오기
-    # pred = get_exp_ret(path)
-    pred = pd.read_csv(path, index_col=0).T
-    pred.index = pd.to_datetime(pred.index)
-
-    # 데이터가 집계되지 않은 기간이 포함된 파일이 있으므로 해당 구간 제거
-    price = price_bd.ffill().dropna(axis=0, how='all')
-    market = market_bd.ffill().dropna(axis=0, how='all')
-    halt = halt_bd.ffill().dropna(axis=0, how='all')
-    mktval = mktval_bd.ffill().dropna(axis=0, how='all')
-
-    # date와 column 통일하기
-    basedate = findBaseDate(price, market, halt, mktval)
-    price = price[price.index >= basedate]
-    market = market[market.index >= basedate][price.columns]
-    halt = halt[halt.index >= basedate][price.columns]
-    mktval = mktval[mktval.index >= basedate][price.columns]
-
-    startdate =pred.index[0]
-
-    weight_path = f'./weight/{country}/mvo_weight'
-    if not os.path.exists(weight_path):
-        os.makedirs(weight_path)
-
-    # BM portfolio 계산
-    print(f'Calculating {country}+{name}+{rebal_freq}')
-
-    rm = 'MV'
-
-    # declare weighting method
-    weighting_method = 'optmvo'
-
-    wb = WeightBuilder(rebal_freq=rebal_freq, startdate=startdate, enddate=None
-                       , mktval_top_n=0.95, factor_top_n=[10, 0.2, 200]
-                       , price_bd=price, market_bd=market, halt_bd=halt, mktval_bd=mktval
-                       )
-    #set current date as date_list
-    wb.date_list = [startdate]
-
-    weight = wb.calcWeight(factor_bd=pred
-                           , listed_window=52
-                           , weighting_method=weighting_method
-                           , multiproc_partition=1
-                           , weight_limit=weightlimit
-                           , rm=rm
-                           , active_multiproc=False
-                           )
-
-    weight.to_csv(
-        f'{weight_path}/{name}+{weighting_method}+{rm}+{rebal_freq}.csv')
+        w.to_csv(f'tmp{factor}.csv')

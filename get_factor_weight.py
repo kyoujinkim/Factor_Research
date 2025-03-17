@@ -2,7 +2,7 @@ from glob import glob
 
 import pandas as pd
 from src.funs import *
-from src.calcWeight import WeightBuilder
+from src.calcWeight_1v import WeightBuilder
 def calc_factor_weight(country, rebal_freq):
 
     # 1. 데이터 불러오기
