@@ -1,12 +1,15 @@
 import os
 import shutil
+from glob import glob
 
 import duckdb
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 
-from src.smman import SharedMemoryManager as smm
+from multiprocessing import shared_memory as smm
+from src.smman import call_shared_memory, load_shared_memory
 import src.loadData as ld
 
 # Disable DuckDB's progress bar
@@ -256,10 +259,19 @@ if __name__ == '__main__':
         pass
 
     data_list.append('mktcap')
+    smman = {}
+    for path in glob(f'{bpath}/*.parquet'):
+        info = call_shared_memory(path)
+        smman[path] = info
+
+    df = load_shared_memory(smm[list(smm.keys())[0]])
+
 
     # build data
-    #for data in tqdm(data_list):
-    #    dp.build_data(bpath, data, None, None)
+    for data in tqdm(data_list):
+        dp.build_data(bpath, data, None, None)
+
+
 
     wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
     w = wb.run(start='2024-06-30'
