@@ -1,4 +1,5 @@
 import os
+import pickle
 import shutil
 from glob import glob
 
@@ -8,16 +9,13 @@ import pandas as pd
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 
-from multiprocessing import shared_memory as smm
-from src.smman import call_shared_memory, load_shared_memory
+from multiprocessing.shared_memory import SharedMemory
 import src.loadData as ld
 
 # Disable DuckDB's progress bar
 duckdb.sql("PRAGMA enable_progress_bar=false")
 
 class WeightBuilder:
-    shared_mem_managers = {}
-
     def __init__(self
                  , index:pd.DataFrame
                  , rebal_freq:str='m'
@@ -46,6 +44,11 @@ class WeightBuilder:
         # get monthly date(last week's Friday), to build monthly portfolio weight
         port_dates = pd.date_range(start=start, end=end, freq=self.data_freq)
         port_dates = pd.Series(port_dates, index=port_dates).resample(self.rebal_freq).last()
+
+        data_list = glob(f"{kwargs.get('base_path', './cache')}/*.parquet")
+        for data in data_list:
+            self.shmem(data) # Corrected syntax
+
         # set list of variable to process in parallel
         var = [
             {
@@ -61,6 +64,31 @@ class WeightBuilder:
             weights = [WeightBuilder.__calc_weight__(v) for v in var]
 
         return pd.concat(weights,axis=0)
+
+    def shmem(self, path):
+        datadf = pd.read_parquet(path, engine='pyarrow')
+        datapk = pickle.dumps(datadf)
+        # Create shared memory
+        shm = SharedMemory(create=True, size=len(datapk))
+        setattr(self, path, shm)
+
+        # Create a NumPy array from shared memory buffer
+        buf_array = np.frombuffer(shm.buf, dtype=np.uint8)
+        setattr(self, path + '_buf', buf_array)
+
+        # Copy serialized data into shared memory
+        buf_array[:] = np.frombuffer(datapk, dtype=np.uint8)
+
+    @staticmethod
+    def __load_mem__(name):
+        # Retrieve data from shared memory (for validation)
+        shm = SharedMemory(name=name)  # Attach to existing shared memory
+        datapkex = bytes(shm.buf[:])  # Read bytes
+        datadfex = pickle.loads(datapkex)
+        # Close shared memory
+        shm.close()  # Corrected syntax
+
+        return datadfex
 
     @staticmethod
     def __calc_weight__(var):
@@ -229,7 +257,7 @@ if __name__ == '__main__':
     index = 'RAY'
 
     # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    index_master = pd.read_parquet(f'C:/Users/gklb/factor_db/members/master_{index}.parquet', engine='pyarrow')
     #curr_index = index_master.iloc[-1:].dropna(axis=1)
     dp.load_stocks(index_master.columns)
 
@@ -259,19 +287,10 @@ if __name__ == '__main__':
         pass
 
     data_list.append('mktcap')
-    smman = {}
-    for path in glob(f'{bpath}/*.parquet'):
-        info = call_shared_memory(path)
-        smman[path] = info
-
-    df = load_shared_memory(smm[list(smm.keys())[0]])
-
 
     # build data
-    for data in tqdm(data_list):
-        dp.build_data(bpath, data, None, None)
-
-
+    #for data in tqdm(data_list):
+    #    dp.build_data(bpath, data, None, None)
 
     wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
     w = wb.run(start='2024-06-30'

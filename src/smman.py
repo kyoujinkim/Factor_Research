@@ -1,4 +1,5 @@
 import multiprocessing.shared_memory as sm
+from multiprocessing.managers import SharedMemoryManager
 
 import numpy as np
 import pandas as pd
@@ -38,3 +39,11 @@ def load_shared_memory(info):
     new_shm.close()
 
     return df
+
+from multiprocessing.managers import SharedMemoryManager
+
+class test:
+    memory = {'a':1, 'b':2}
+
+smm = SharedMemoryManager()
+smm.start()
