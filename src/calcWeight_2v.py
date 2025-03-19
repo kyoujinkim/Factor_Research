@@ -45,15 +45,18 @@ class WeightBuilder:
         port_dates = pd.date_range(start=start, end=end, freq=self.data_freq)
         port_dates = pd.Series(port_dates, index=port_dates).resample(self.rebal_freq).last()
 
+        data_key = {}
         data_list = glob(f"{kwargs.get('base_path', './cache')}/*.parquet")
         for data in data_list:
-            self.shmem(data) # Corrected syntax
+            name = self.__save_memory__(data)
+            data_key[data] = name
 
         # set list of variable to process in parallel
         var = [
             {
             'pdate':pdate
             , 'code_list':self.index.loc[:pdate].iloc[-1].dropna().index
+            , 'data_key':data_key
             , **kwargs
             }
             for pdate in port_dates]
@@ -65,7 +68,7 @@ class WeightBuilder:
 
         return pd.concat(weights,axis=0)
 
-    def shmem(self, path):
+    def __save_memory__(self, path):
         datadf = pd.read_parquet(path, engine='pyarrow')
         datapk = pickle.dumps(datadf)
         # Create shared memory
@@ -79,8 +82,10 @@ class WeightBuilder:
         # Copy serialized data into shared memory
         buf_array[:] = np.frombuffer(datapk, dtype=np.uint8)
 
+        return shm.name
+
     @staticmethod
-    def __load_mem__(name):
+    def __load_memory__(name):
         # Retrieve data from shared memory (for validation)
         shm = SharedMemory(name=name)  # Attach to existing shared memory
         datapkex = bytes(shm.buf[:])  # Read bytes
@@ -99,6 +104,7 @@ class WeightBuilder:
         path = var.get('base_path', './cache')
         pdate = var.get('pdate', None)
         code_list = var.get('code_list', [])
+        data_key = var.get('data_key', {})
         factor = var.get('factor', None)
         mktcap_n = var.get('mktcap_n', -1)
         factor_n = var.get('factor_n', -1)
