@@ -66,6 +66,12 @@ class WeightBuilder:
         else:
             weights = [WeightBuilder.__calc_weight__(v) for v in var]
 
+        # Close shared memory
+        for key in data_key.keys():
+            shm = SharedMemory(name=data_key[key])
+            shm.close()
+            shm.unlink()
+
         return pd.concat(weights,axis=0)
 
     def __save_memory__(self, path):
@@ -77,10 +83,12 @@ class WeightBuilder:
 
         # Create a NumPy array from shared memory buffer
         buf_array = np.frombuffer(shm.buf, dtype=np.uint8)
-        setattr(self, path + '_buf', buf_array)
+        #setattr(self, path + '_buf', buf_array)
 
         # Copy serialized data into shared memory
         buf_array[:] = np.frombuffer(datapk, dtype=np.uint8)
+
+        del buf_array
 
         return shm.name
 
@@ -88,12 +96,19 @@ class WeightBuilder:
     def __load_memory__(name):
         # Retrieve data from shared memory (for validation)
         shm = SharedMemory(name=name)  # Attach to existing shared memory
-        datapkex = bytes(shm.buf[:])  # Read bytes
-        datadfex = pickle.loads(datapkex)
+        datadfex = pickle.loads(shm.buf[:])
         # Close shared memory
-        shm.close()  # Corrected syntax
+        shm.close()# Corrected syntax
+        shm.unlink()
 
         return datadfex
+
+    @staticmethod
+    def __find_key__(data, data_key):
+        for key in data_key.keys():
+            if data in key:
+                return data_key[key]
+        return None
 
     @staticmethod
     def __calc_weight__(var):
@@ -101,7 +116,6 @@ class WeightBuilder:
         :param var: [path, pdate, factor, weighting_method, weight_limit, rm]
         :return: weight for pdate
         '''
-        path = var.get('base_path', './cache')
         pdate = var.get('pdate', None)
         code_list = var.get('code_list', [])
         data_key = var.get('data_key', {})
@@ -112,11 +126,11 @@ class WeightBuilder:
         weight_limit = var.get('weight_limit', None)
 
         if len(code_list)>0:
-            code_list, _ = WeightBuilder.__filter_by_date__(code_list, path, 'return', pdate, 52)
+            code_list, _ = WeightBuilder.__filter_by_date__(code_list, data_key, 'return', pdate, 52)
         if len(code_list)>0:
-            code_list, mktcap_db = WeightBuilder.__filter_by__(code_list, path, 'mktcap', pdate, mktcap_n)
+            code_list, mktcap_db = WeightBuilder.__filter_by__(code_list, data_key, 'mktcap', pdate, mktcap_n)
         if len(code_list)>0 and factor:
-            code_list, factor_db = WeightBuilder.__filter_by__(code_list, path, factor, pdate, factor_n)
+            code_list, factor_db = WeightBuilder.__filter_by__(code_list, data_key, factor, pdate, factor_n)
 
         if len(code_list)==0:
             w = pd.DataFrame(columns=[pdate])
@@ -128,22 +142,22 @@ class WeightBuilder:
         elif weighting_method == 'factor':
             w = WeightBuilder.__weight_by__(code_list, 'weight', factor_db)
 
-        w.columns = [pdate]
+        w.index = [pdate]
 
-        return w.T
+        return w
 
     @staticmethod
     def __weight_by__(code_list, method, db=None):
         if method == 'equal':
-            w = pd.DataFrame(1 / len(code_list), index=code_list, columns=['weight'])
+            w = pd.DataFrame(1 / len(code_list), index=['weight'], columns=code_list)
         elif method == 'weight':
             w = db[code_list]
-            w = w / w.sum()
+            w = w / w.sum(axis=1).values[0]
 
         return w.fillna(0)
 
     @staticmethod
-    def __filter_by_date__(code_list, path:str, data:str, pdate, window:int=52):
+    def __filter_by_date__(code_list, data_key:dict, data:str, pdate, window:int=52):
         '''
         filter data by date
         :param path:
@@ -151,16 +165,17 @@ class WeightBuilder:
         :param window:
         :return:
         '''
+        shmname = WeightBuilder.__find_key__(data, data_key)
 
         sdate = pdate - pd.DateOffset(weeks=window)
 
-        db = WeightBuilder.__load_db__(code_list, path, data, sdate, pdate)
+        db = WeightBuilder.__load_db__(code_list=code_list, shm_name=shmname, start=sdate, end=pdate) #code_list, shm_name:str, start:str, end:str, **kwargs
         code_list = db.dropna(axis=1).columns.to_list()
 
         return code_list, db
 
     @staticmethod
-    def __filter_by__(code_list, path:str, data:str, pdate, n:int=-1):
+    def __filter_by__(code_list, data_key:dict, data:str, pdate, n:int=-1):
         '''
         filter data by market value
         :param path:
@@ -168,9 +183,11 @@ class WeightBuilder:
         :param window:
         :return:
         '''
+        shmname = WeightBuilder.__find_key__(data, data_key)
 
         sdate = pdate - pd.DateOffset(weeks=4)
-        db = WeightBuilder.__load_db__(code_list, path, data, sdate, pdate, order='DESC', limit=1)
+
+        db = WeightBuilder.__load_db__(code_list=code_list, shm_name=shmname, start=sdate, end=pdate, limit=1)
         db = db.dropna(axis=1)
 
         if len(db) == 0:
@@ -189,8 +206,8 @@ class WeightBuilder:
                 bottom = n[1]
             # if top_n is float, calculate top and bottom
             elif type(n[0]) == float:
-                top = min(int(n[0] * len(db)), len(db) / 2)
-                bottom = min(int(n[1] * len(db)), len(db) / 2)
+                top = min(int(n[0] * len(db)), len(db)/2)
+                bottom = min(int(n[1] * len(db)), len(db)/2)
             else:
                 raise ValueError('element of top_n(top, bottom) must be int or float')
             code_list = db.sort_values()[top:bottom]
@@ -208,7 +225,7 @@ class WeightBuilder:
         return code_list
 
     @staticmethod
-    def __load_db__(code_list, path:str, data:str, start:str, end:str, **kwargs):
+    def __load_db__(code_list, shm_name:str, start:str, end:str, **kwargs):
         '''
         load data from db
         :param path:
@@ -218,20 +235,18 @@ class WeightBuilder:
         :return:
         '''
         order = kwargs.get('order', 'ASC')
-        limit = kwargs.get('limit', 'NULL')
-
-        file_path = f"{path}/{data}.parquet"
+        limit = kwargs.get('limit', -1)
 
         # Load file into shared memory if not already loaded
-        if file_path not in WeightBuilder.shared_mem_managers:
-            WeightBuilder.shared_mem_managers[file_path] = smm(file_path)
-            WeightBuilder.shared_mem_managers[file_path].load_to_shared_memory()
-
-        # Read data from shared memory
-        df = WeightBuilder.shared_mem_managers[file_path].read_from_shared_memory()
+        df = WeightBuilder.__load_memory__(shm_name)
 
         # Filter by date range
         df = df.loc[start:end]
+
+        if limit == -1:
+            pass
+        else:
+            df = df.iloc[-limit:]
 
         valid_columns = [col for col in code_list if col in df.columns]
         df = df[valid_columns]
@@ -299,12 +314,12 @@ if __name__ == '__main__':
     #    dp.build_data(bpath, data, None, None)
 
     wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
-    w = wb.run(start='2024-06-30'
-               , end=None
+    w = wb.run(start='2000-01-01'
+               , end='2025-02-14'
                , weighting_method=weighting_method
                , factor=factor
                , base_path=bpath
-               , workers=3
+               , workers=os.cpu_count()-3
                , active_multiproc=True)
 
     w.to_csv('tmp.csv')
