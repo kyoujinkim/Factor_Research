@@ -300,8 +300,8 @@ if __name__ == '__main__':
     dp.load_stocks(index_master.columns)
 
     bpath = './cache/us'
-    #shutil.rmtree(bpath, ignore_errors=True)
-    #os.makedirs(bpath, exist_ok=True)
+    shutil.rmtree(bpath, ignore_errors=True)
+    os.makedirs(bpath, exist_ok=True)
 
     # if factor is designated, build data for factor
     if factor == 'momentum':
@@ -325,10 +325,12 @@ if __name__ == '__main__':
         pass
 
     data_list.append('mktcap')
+    data_list.append('closeprice')
+    data_list.append('DPS')
 
     # build data
-    #for data in tqdm(data_list):
-    #    dp.build_data(bpath, data, None, None)
+    for data in tqdm(data_list):
+        dp.build_data(bpath, data, None, None)
 
     wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
     w = wb.run(start='2000-01-01'
