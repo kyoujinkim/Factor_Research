@@ -2,19 +2,11 @@ import shutil
 from glob import glob
 
 import pandas as pd
+from tqdm import tqdm
+
 from src.funs import *
-import src.factorLib as flib
 from src.calcWeight_2v import WeightBuilder
 import src.loadData as ld
-
-
-def reindex_all(main, *args):
-    basedate = findBaseDate(main, *args)
-    main = main[main.index >= basedate]
-    for arg in args:
-        arg = arg[arg.index >= basedate][main.columns]
-    return main, args
-
 
 if __name__ == '__main__':
 
@@ -23,7 +15,7 @@ if __name__ == '__main__':
 
     # 1. index 선택
     index = 'RAY'
-    weighting_method = 'equal'
+    weighting_method = 'longshort'
 
     # 2. index별로 저장되어있는 index_master 불러오기
     index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
@@ -57,10 +49,11 @@ if __name__ == '__main__':
     wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
 
     for factor in factor_list:
-        w = wb.run(start=None
-                   , end=None
+        w = wb.run(start='2000-01-01'
+                   , end='2025-02-14'
                    , weighting_method=weighting_method
                    , factor=factor
+                   , factor_n=0.2
                    , base_path=bpath
                    , workers=os.cpu_count() - 3
                    , active_multiproc=True)

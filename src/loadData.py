@@ -27,7 +27,7 @@ class BaseData:
     """
     Base class for common attributes and methods shared by Stock and Data.
     """
-    dbpath = 'C:/Users/gklb/factor_db'  # Base path for database files
+    dbpath = 'D:/Factor_DB'  # Base path for database files
 
     @staticmethod
     def load_json(file_path: str):
@@ -325,6 +325,8 @@ class DataProcessor(BaseData):
         else:
             if data == 'return':
                 (self.data(data, start=start, end=end).resample(data_freq).ffill() / 100).to_parquet(f'{cache_path}/{data}.parquet')
+            elif data in ['dividend', 'dps', 'dpsnorm']:
+                self.data(data, start=start, end=end).resample(data_freq).last().to_parquet(f'{cache_path}/{data}.parquet')
             else:
                 self.data(data, start=start, end=end).ffill().resample(data_freq).last().to_parquet(f'{cache_path}/{data}.parquet')
 
@@ -425,7 +427,7 @@ class DataProcessor(BaseData):
         return bookvalue.divide(shares)
 
     def __DPS__(self, start, end):
-        dividend = self.data('dividend', start, end).ffill()
+        dividend = self.data('dividend', start, end)
 
         mktpct = self.data('mktpct', start, end)
         mktpct = mktpct.reindex(dividend.index, method='ffill')
@@ -437,7 +439,7 @@ class DataProcessor(BaseData):
         return dividend.divide(shares)
 
     def __DPSnorm__(self, start, end):
-        dividend = self.data('dividend', start, end).ffill()
+        dividend = self.data('dividend', start, end)
 
         split = self.data('split', start, end).ffill()
         split = split.reindex(dividend.index, method='ffill')

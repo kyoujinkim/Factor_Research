@@ -129,8 +129,6 @@ class WeightBuilder:
             code_list, _ = WeightBuilder.__filter_by_date__(code_list, data_key, 'return', pdate, 52)
         if len(code_list)>0:
             code_list, mktcap_db = WeightBuilder.__filter_by__(code_list, data_key, 'mktcap', pdate, mktcap_n)
-        if len(code_list)>0 and factor:
-            code_list, factor_db = WeightBuilder.__filter_by__(code_list, data_key, factor, pdate, factor_n)
 
         if len(code_list)==0:
             w = pd.DataFrame(columns=[pdate])
@@ -139,8 +137,21 @@ class WeightBuilder:
             w = WeightBuilder.__weight_by__(code_list, 'equal')
         elif weighting_method == 'mktcap':
             w = WeightBuilder.__weight_by__(code_list, 'weight', mktcap_db)
-        elif weighting_method == 'factor':
-            w = WeightBuilder.__weight_by__(code_list, 'weight', factor_db)
+        elif weighting_method == 'longshort':
+            code_list_long, _ = WeightBuilder.__filter_by__(code_list=code_list
+                                                            , data_key=data_key
+                                                            , data=factor
+                                                            , pdate=pdate
+                                                            , n=factor_n)
+            code_list_short, _ = WeightBuilder.__filter_by__(code_list=code_list
+                                                            , data_key=data_key
+                                                            , data=factor
+                                                            , pdate=pdate
+                                                            , n=factor_n
+                                                            , short=True)
+            w_long = WeightBuilder.__weight_by__(code_list_long, 'equal')
+            w_short = WeightBuilder.__weight_by__(code_list_short, 'equal')
+            w = pd.concat([w_long, -w_short], axis=1)
 
         w.index = [pdate]
 
@@ -175,7 +186,7 @@ class WeightBuilder:
         return code_list, db
 
     @staticmethod
-    def __filter_by__(code_list, data_key:dict, data:str, pdate, n:int=-1):
+    def __filter_by__(code_list, data_key:dict, data:str, pdate, n:int=-1, short:bool=False):
         '''
         filter data by market value
         :param path:
@@ -193,12 +204,15 @@ class WeightBuilder:
         if len(db) == 0:
             return [], None
         else:
-            code_list = WeightBuilder.__filter_n__(n, db)
-            code_list = code_list.columns.to_list()
+            if short:
+                code_list = WeightBuilder.__filter_n__(n, db, asc=True)
+            else:
+                code_list = WeightBuilder.__filter_n__(n, db, asc=False)
             return code_list, db
 
     @staticmethod
-    def __filter_n__(n, db):
+    def __filter_n__(n, db, asc:bool=False):
+        dbm = db.mean()
         if type(n) == list:
             # if top_n is int, calculate top and bottom
             if type(n[0]) == int:
@@ -206,23 +220,28 @@ class WeightBuilder:
                 bottom = n[1]
             # if top_n is float, calculate top and bottom
             elif type(n[0]) == float:
-                top = min(int(n[0] * len(db)), len(db)/2)
-                bottom = min(int(n[1] * len(db)), len(db)/2)
+                top = min(int(n[0] * len(dbm)), len(dbm)/2)
+                bottom = min(int(n[1] * len(dbm)), len(dbm)/2)
             else:
                 raise ValueError('element of top_n(top, bottom) must be int or float')
-            code_list = db.sort_values()[top:bottom]
+            code_list = dbm.sort_values(ascending=asc)[top:bottom]
         elif type(n) == int:
             if n == -1:
-                code_list = db
+                code_list = dbm
             else:
-                code_list = db.sort_values()[:n]
+                code_list = dbm.sort_values(ascending=asc)[:n]
         elif type(n) == float:
-            top = int(n * len(db))
-            code_list = db.sort_values()[:top]
+            top = int(n * len(dbm))
+            code_list = dbm.sort_values(ascending=asc)[:top]
         else:
             raise ValueError('top n must be int or float or list')
 
-        return code_list
+        if type(code_list)==pd.Series:
+            return code_list.index.to_list()
+        elif type(code_list)==pd.DataFrame:
+            return code_list.columns.to_list()
+        else:
+            return code_list
 
     @staticmethod
     def __load_db__(code_list, shm_name:str, start:str, end:str, **kwargs):
@@ -234,7 +253,6 @@ class WeightBuilder:
         :param end:
         :return:
         '''
-        order = kwargs.get('order', 'ASC')
         limit = kwargs.get('limit', -1)
 
         # Load file into shared memory if not already loaded
@@ -269,7 +287,7 @@ class WeightBuilder:
 if __name__ == '__main__':
 
     factor = 'momentum'
-    weighting_method = 'equal'
+    weighting_method = 'longshort'
 
     dp = ld.DataProcessor()
     dp.turnon_cache()
@@ -278,8 +296,7 @@ if __name__ == '__main__':
     index = 'RAY'
 
     # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'C:/Users/gklb/factor_db/members/master_{index}.parquet', engine='pyarrow')
-    #curr_index = index_master.iloc[-1:].dropna(axis=1)
+    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
     dp.load_stocks(index_master.columns)
 
     bpath = './cache/us'
@@ -318,6 +335,7 @@ if __name__ == '__main__':
                , end='2025-02-14'
                , weighting_method=weighting_method
                , factor=factor
+               , factor_n=0.2
                , base_path=bpath
                , workers=os.cpu_count()-3
                , active_multiproc=True)
