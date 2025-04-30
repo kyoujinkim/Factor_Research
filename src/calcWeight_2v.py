@@ -39,7 +39,9 @@ class WeightBuilder:
         active_multiproc = kwargs.get('active_multiproc', True)
 
         if start is None:
-            start = self.index.index[0]
+            start = self.index.index[0].strftime('%Y-%m-%d')
+        else:
+            start = max(start, self.index.index[0].strftime('%Y-%m-%d'))
         start, end = self.__proc_na_date(start, end)
         # get monthly date(last week's Friday), to build monthly portfolio weight
         port_dates = pd.date_range(start=start, end=end, freq=self.data_freq)
@@ -131,13 +133,15 @@ class WeightBuilder:
             code_list, mktcap_db = WeightBuilder.__filter_by__(code_list, data_key, 'mktcap', pdate, mktcap_n)
 
         if len(code_list)==0:
-            w = pd.DataFrame(columns=[pdate])
+            return pd.DataFrame(index=[pdate])
 
         if weighting_method == 'equal':
             w = WeightBuilder.__weight_by__(code_list, 'equal')
         elif weighting_method == 'mktcap':
             w = WeightBuilder.__weight_by__(code_list, 'weight', mktcap_db)
         elif weighting_method == 'longshort':
+            if factor is None:
+                raise ValueError('factor is None')
             code_list_long, _ = WeightBuilder.__filter_by__(code_list=code_list
                                                             , data_key=data_key
                                                             , data=factor
@@ -149,11 +153,16 @@ class WeightBuilder:
                                                             , pdate=pdate
                                                             , n=factor_n
                                                             , short=True)
+            if len(code_list_long) == 0 or len(code_list_short) == 0:
+                return pd.DataFrame(index=[pdate])
+
             w_long = WeightBuilder.__weight_by__(code_list_long, 'equal')
             w_short = WeightBuilder.__weight_by__(code_list_short, 'equal')
             w = pd.concat([w_long, -w_short], axis=1)
 
         w.index = [pdate]
+        if weight_limit is not None:
+            w = WeightBuilder.__weight_limit__(w, limit=weight_limit)
 
         return w
 
@@ -166,6 +175,32 @@ class WeightBuilder:
             w = w / w.sum(axis=1).values[0]
 
         return w.fillna(0)
+
+    @staticmethod
+    def __weight_limit__(weight, limit: float = 0.3):
+        '''
+        비중값이 limit을 초과하는 경우 limit으로 설정하고, 나머지 종목들을 남은 비율에 맞추어 조정
+        :param weight: 비중값 데이터프레임
+        :param limit: 비중값 제한
+        :return: 비중값이 제한된 비중값 데이터프레임
+        '''
+        # 1. 비중값이 limit을 초과하는 경우 limit으로 설정하고, 나머지 종목들을 남은 비율에 맞추어 조정
+        # 제일 높은 값들을 하나하나 pop해서 limit을 초과하지 않게 조정해주는 식으로 처리하는게 제일 좋을 듯
+        result = []
+        total_val = 1
+        while weight.max(axis=1).values[0] > limit and len(weight) > 0:
+            target = weight.columns[np.argmax(weight)]
+            overweight = pd.DataFrame(weight.pop(target))
+            overweight[target] = limit
+            result.append(overweight)
+            total_val -= limit
+
+            weight = weight * total_val / weight.sum(axis=1).values[0]
+
+        result.append(weight)
+        weight_df = pd.concat(result, axis=1)
+
+        return weight_df
 
     @staticmethod
     def __filter_by_date__(code_list, data_key:dict, data:str, pdate, window:int=52):

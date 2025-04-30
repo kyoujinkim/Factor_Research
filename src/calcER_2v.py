@@ -1,34 +1,30 @@
 import itertools
+import os
+import warnings
 
 import numpy as np
 import pandas as pd
-from pandas._libs.tslibs.offsets import MonthEnd
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
-#import plt
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from src.funs import *
+from pandas._libs.tslibs.offsets import MonthEnd
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 class Calculator:
     '''
     계산기 클래스
     '''
 
-    def __init__(self, price:pd.DataFrame, halt: pd.DataFrame=None, rf: pd.DataFrame=None, bm: pd.DataFrame=None):
+    def __init__(self, index:pd.DataFrame, price:pd.DataFrame, rf: pd.DataFrame=None, bm: pd.DataFrame=None):
+        self.index = index
         self.price_bd = price
-        if halt is None:
-            self.halt_bd = pd.DataFrame(0, index=price.index, columns=price.columns)
-        else:
-            self.halt_bd = halt
         if rf is None:
             #set rf as 0 if not given
-            self.rf_bd = pd.DataFrame(0, index=halt.index)
+            self.rf_bd = pd.DataFrame(0, index=price.index)
         else:
             # since rf is given as percentage
             self.rf_bd = rf.fillna(method='ffill') / 100
         if bm is None:
-            self.bm_bd = pd.DataFrame(np.ones(len(self.halt_bd.index)), index=self.halt_bd.index, columns=['bm'])
+            self.bm_bd = pd.DataFrame(np.ones(len(self.price.index)), index=self.price.index, columns=['bm'])
         else:
             self.bm_bd = bm.fillna(method='ffill')
 
@@ -68,6 +64,8 @@ class Calculator:
             bday = 12
         elif resample=='W':
             bday = 52
+        else:
+            bday = 252
 
         #result = []
         #for i in tqdm(range(basewindow+1, len(self.price))):
@@ -119,28 +117,40 @@ class Calculator:
         method, bday, basewindow, window, i, view_betas = var
 
         temp_price = self.price.iloc[i - (basewindow + 1):i]
-        halt = self.halt_bd[self.halt_bd.index <= temp_price.index[-1]][-window:].dropna(axis=1).sum()
-        halt = halt[halt == 0]
-        temp_price = temp_price[halt.index]
-        temp_rf = self.rf[self.rf.index <= temp_price.index[-1]].iloc[i - (basewindow + 1):i]
-        temp_bm = self.bm[self.bm.index <= temp_price.index[-1]].iloc[i - (basewindow + 1):i]
+        temp_date = temp_price.index[-1]
 
-        try: temp_hml = self.hml[self.hml.index <= temp_price.index[-1]].iloc[i - (basewindow + 1):i]
+        if len(self.index.loc[:temp_date]) == 0:
+            return None
+        members = self.index.loc[:temp_date].iloc[-1].dropna()
+        unimembers = list(set(temp_price.columns)&set(members.index))
+        temp_price = temp_price[unimembers]
+        temp_rf = self.rf[self.rf.index <= temp_date].iloc[-(basewindow + 1):]
+        temp_bm = self.bm[self.bm.index <= temp_date].iloc[-(basewindow + 1):]
+
+        minimum_len = len(temp_price)
+        try:
+            temp_hml = self.hml[self.hml.index <= temp_date].iloc[-(basewindow + 1):]
+            minimum_len = min(minimum_len, len(temp_hml))
         except: temp_hml = None
-        try: temp_smb = self.smb[self.smb.index <= temp_price.index[-1]].iloc[i - (basewindow + 1):i]
+        try:
+            temp_smb = self.smb[self.smb.index <= temp_date].iloc[-(basewindow + 1):]
+            minimum_len = min(minimum_len, len(temp_smb))
         except: temp_smb = None
-        try: temp_mom = self.mom[self.mom.index <= temp_price.index[-1]].iloc[i - (basewindow + 1):i]
+        try:
+            temp_mom = self.mom[self.mom.index <= temp_date].iloc[-(basewindow + 1):]
+            minimum_len = min(minimum_len, len(temp_mom))
         except: temp_mom = None
-        try: temp_op = self.op[self.op.index <= temp_price.index[-1]].iloc[i - (basewindow + 1):i]
+        try:
+            temp_op = self.op[self.op.index <= temp_date].iloc[-(basewindow + 1):]
+            minimum_len = min(minimum_len, len(temp_op))
         except: temp_op = None
-        try: temp_inv = self.inv[self.inv.index <= temp_price.index[-1]].iloc[i - (basewindow + 1):i]
+        try:
+            temp_inv = self.inv[self.inv.index <= temp_date].iloc[-(basewindow + 1):]
+            minimum_len = min(minimum_len, len(temp_inv))
         except: temp_inv = None
 
-        #if date is not match raise error
-        if temp_price.index[-1] != temp_bm.index[-1]:
-            raise ValueError('Date between price, bm is not matched')
-        elif temp_price.index[-1] != temp_rf.index[-1]:
-            raise ValueError('Date between price, rf is not matched')
+        if minimum_len != len(temp_price):
+            return None
 
         result = self.calc_exp_rtn(method=method
                                 , bday=bday
@@ -197,10 +207,6 @@ class Calculator:
 
         result_df = pd.DataFrame(result, columns=['Index', 'MSFE', 'IC', 'Rank_IC', 'IR']).set_index('Index')
         return result_df
-
-    #def evaluate_by(self, data:list, window:int=1, resample:str='M', **kwargs) -> pd.DataFrame:
-    #    '''
-    #    d
 
     def calc_exp_rtn(self, method: str, bday:int, window:int
                      , price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame
@@ -286,7 +292,7 @@ class Calculator:
         # 4. multivariate beta 계산
         betas = []
         for col in rtn_pure:
-            beta = getBeta(rtn_pure[col], rtn_bm_pure)
+            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure)
             betas.append(beta)
         betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm'])
         expected_return = (betas_df.intercept
@@ -320,7 +326,7 @@ class Calculator:
         # 4. multivariate beta 계산
         betas = []
         for col in rtn_pure:
-            beta = getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml_pure, rtn_smb_pure)
+            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml_pure, rtn_smb_pure)
             betas.append(beta)
         betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb'])
         expected_return = (betas_df.intercept
@@ -368,7 +374,7 @@ class Calculator:
         # 4. multivariate beta 계산
         betas = []
         for col in rtn_pure:
-            beta = getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml_pure, rtn_smb_pure, rtn_op_pure, rtn_inv_pure)
+            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml_pure, rtn_smb_pure, rtn_op_pure, rtn_inv_pure)
             betas.append(beta)
         betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb', 'beta_op', 'beta_inv'])
         expected_return = (betas_df.intercept
@@ -408,7 +414,7 @@ class Calculator:
         # 4. multivariate beta 계산
         betas = []
         for col in rtn_pure:
-            beta = getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml_pure, rtn_smb_pure, rtn_mom_pure)
+            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml_pure, rtn_smb_pure, rtn_mom_pure)
             betas.append(beta)
         betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb', 'beta_mom'])
         expected_return = (betas_df.intercept
@@ -461,7 +467,7 @@ class Calculator:
         # 4. multivariate beta 계산
         betas = []
         for col in rtn_pure:
-            beta = getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml_pure, rtn_smb_pure, rtn_op_pure, rtn_inv_pure, rtn_mom_pure)
+            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml_pure, rtn_smb_pure, rtn_op_pure, rtn_inv_pure, rtn_mom_pure)
             betas.append(beta)
         betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb', 'beta_op', 'beta_inv', 'beta_mom'])
         expected_return = (betas_df.intercept
@@ -475,7 +481,8 @@ class Calculator:
         # 6. 기대수익률 계산
         return expected_return, betas_df
 
-    def _rev_exp_rtn(self, price, bm, rf, window, lag, bday):
+    @staticmethod
+    def _rev_exp_rtn(price, bm, rf, window, lag, bday):
         # calculate long term reversion
         rtn_rev = price.pct_change(periods=1).iloc[-window -lag: -lag].bfill()
         rtn_bm_lag = bm.pct_change(periods=1).iloc[-window -lag: -lag].bfill()
@@ -485,7 +492,7 @@ class Calculator:
 
         rev_betas = []
         for col in rtn_rev.columns:
-            beta = getBeta(rtn_pure_rev[col], rtn_bm_pure_lag, intercept=True)
+            beta = Calculator._getBeta(rtn_pure_rev[col], rtn_bm_pure_lag, intercept=True)
             rev_betas.append(beta)
         rev_betas_df = pd.DataFrame(rev_betas, index=rtn_rev.columns, columns=['intercept', 'beta_strev'])
 
@@ -518,23 +525,23 @@ class Calculator:
 
         betas = []
         for col in rtn_pure.columns:
-            beta = getBeta(rtn_pure[col], rtn_bm_pure, intercept=True)
+            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, intercept=True)
             betas.append(beta)
 
         betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm'])
 
         # calculate long term reversion
-        expected_return_prev = self._rev_exp_rtn(price, bm, rf, window, 1, bday)
+        expected_return_prev = Calculator._rev_exp_rtn(price, bm, rf, window, 1, bday)
         de_expected_return_prev = expected_return_prev - expected_return_prev.mean()
         de_rtn_pure = rtn_pure.iloc[-1:].mean().values - rtn_pure.iloc[-1:].mean().values.mean()
         sign1 = de_expected_return_prev / de_rtn_pure
 
-        expected_return_prev = self._rev_exp_rtn(price, bm, rf, window, 2, bday)
+        expected_return_prev = Calculator._rev_exp_rtn(price, bm, rf, window, 2, bday)
         de_expected_return_prev = expected_return_prev - expected_return_prev.mean()
         de_rtn_pure = rtn_pure.iloc[-2:-1].mean().values - rtn_pure.iloc[-2:-1].mean().values.mean()
         sign2 = de_expected_return_prev / de_rtn_pure
 
-        expected_return_prev = self._rev_exp_rtn(price, bm, rf, window, 3, bday)
+        expected_return_prev = Calculator._rev_exp_rtn(price, bm, rf, window, 3, bday)
         de_expected_return_prev = expected_return_prev - expected_return_prev.mean()
         de_rtn_pure = rtn_pure.iloc[-3:-2].mean().values - rtn_pure.iloc[-3:-2].mean().values.mean()
         sign3 = de_expected_return_prev / de_rtn_pure
@@ -573,7 +580,8 @@ class Calculator:
         # 6. 기대수익률 계산
         return result.ER_fit, betas_df
 
-    def _msfe(self, actual, pred):
+    @staticmethod
+    def _msfe(actual, pred):
         '''
         Mean Squared Forecast Error
         :param actual: actual return
@@ -582,7 +590,8 @@ class Calculator:
         '''
         return ((actual - pred) ** 2).mean()
 
-    def _corr(self, actual, pred, method):
+    @staticmethod
+    def _corr(actual, pred, method):
         '''
         Correlation Coefficient
         :param actual: actual return
@@ -593,11 +602,12 @@ class Calculator:
         if method=='pearson' or method is None:
             return actual.corr(pred)
         elif method=='spearman':
-            return spearman_corr(actual, pred)
+            return Calculator.spearman_corr(actual, pred)
         else:
             raise ValueError('method should be either pearson or spearman')
 
-    def _rankcorr(self, actual, pred, method):
+    @staticmethod
+    def _rankcorr(actual, pred, method):
         '''
         Rank Correlation Coefficient
         :param actual: actual return
@@ -608,11 +618,12 @@ class Calculator:
         if method=='pearson':
             return actual.rank().corr(pred.rank())
         elif method=='spearman' or method is None:
-            return spearman_corr(actual.rank(), pred.rank())
+            return Calculator.spearman_corr(actual.rank(), pred.rank())
         else:
             raise ValueError('method should be either pearson or spearman')
 
-    def _ir(self, actual, pred):
+    @staticmethod
+    def _ir(actual, pred):
         '''
         Information Ratio
         :param actual: actual return
@@ -620,3 +631,29 @@ class Calculator:
         :return: IR value
         '''
         return ((actual - pred) / pred.std()).mean()
+
+    @staticmethod
+    def _getBeta(y, *x, intercept: bool = True):
+        # argument *x to array
+        X = np.array(x)
+        if len(X.shape) > 2:
+            X = X.reshape([X.shape[0], X.shape[1]])
+        y = np.array(y)
+        y = y.reshape(-1, 1)
+
+        if intercept:
+            X = np.vstack([np.ones(len(y)), X]).T
+        else:
+            X = X.T
+
+        if X.shape[1] == 1:
+            return y.sum() / X.sum()
+        else:
+            return np.ravel(np.linalg.inv(X.T @ X) @ X.T @ y)
+
+    @staticmethod
+    def spearman_corr(x, y):
+
+        r = 1 - 6 * np.sum((x - y) ** 2) / (len(x) * (len(x) ** 2 - 1))
+
+        return r

@@ -128,6 +128,7 @@ class DataProcessor(BaseData):
     def __init__(self):
         super().__init__()
         self.stock = {}
+        self.turnoff_cache()
 
     def turnon_cache(self):
         self.maintain_cache = True
@@ -168,6 +169,29 @@ class DataProcessor(BaseData):
         """
         self.stock = {}
 
+    def tag(self, data_key:str):
+        """
+        Load tag from the provided data key.
+        data_key (str): The key of the data to load.
+            - "name" : name
+            - "sector" : sector
+            - "issuename" : issue name
+            - "country" : country
+            - "currency" : currency
+        """
+        data_key = data_key.lower()
+        result = []
+        if data_key in self.data_master:
+            if self.data_master[data_key]['cls'] == 'tag':
+                for s in self.stock.keys():
+                   result.append([s, self.stock[s].info.get(data_key, None)])
+
+                return pd.DataFrame(result, columns=['instrument', data_key]).set_index('instrument')
+            else:
+                raise ValueError(f"Data key '{data_key}' is not a tag.")
+        else:
+            raise ValueError(f"Data key '{data_key}' not found in data_master.")
+
     def data(self, data_key: str, start: str = None, end: str = None, rolling=0):
         """
         Load data from the provided data key.
@@ -205,6 +229,8 @@ class DataProcessor(BaseData):
             self.cache[data_key] = self.__mktpct__(start, end)
         elif data_key == 'aprice':
             self.cache[data_key] = self.__aprice__(start, end)
+        elif data_key == 'zprice':
+            self.cache[data_key] = self.__zprice__(start, end)
         elif data_key == 'eps':
             self.cache[data_key] = self.__EPS__(start, end)
         elif data_key == 'epsnorm':
@@ -217,6 +243,8 @@ class DataProcessor(BaseData):
             self.cache[data_key] = self.__DPS__(start, end)
         elif data_key == 'dpsnorm':
             self.cache[data_key] = self.__DPSnorm__(start, end)
+        elif data_key == 'zdps':
+            self.cache[data_key] = self.__zDPS__(start, end)
         elif data_key == 'ep':
             self.cache[data_key] = self.__EP__(start, end)
         elif data_key == 'bp':
@@ -325,10 +353,10 @@ class DataProcessor(BaseData):
         else:
             if data == 'return':
                 (self.data(data, start=start, end=end).resample(data_freq).ffill() / 100).to_parquet(f'{cache_path}/{data}.parquet')
-            elif data in ['dividend', 'dps', 'dpsnorm']:
-                self.data(data, start=start, end=end).resample(data_freq).last().to_parquet(f'{cache_path}/{data}.parquet')
+            elif data in ['dividend', 'dps', 'dpsnorm', 'dy']:
+                self.data(data, start=start, end=end).resample(data_freq).max().to_parquet(f'{cache_path}/{data}.parquet')
             else:
-                self.data(data, start=start, end=end).ffill().resample(data_freq).last().to_parquet(f'{cache_path}/{data}.parquet')
+                self.data(data, start=start, end=end).ffill().resample(data_freq).ffill().to_parquet(f'{cache_path}/{data}.parquet')
 
         return pd.read_parquet(f'{cache_path}/{data}.parquet')
 
@@ -369,6 +397,12 @@ class DataProcessor(BaseData):
         closeprice = closeprice.multiply(split)
 
         return closeprice
+
+    def __zprice__(self, start, end):
+        rtn = self.data('return', start, end)
+        zprice = (1 + rtn/100).cumprod()
+
+        return zprice
 
     def __EPS__(self, start, end):
         earnings = self.data('earnings', start, end, rolling=4).ffill()
@@ -453,6 +487,17 @@ class DataProcessor(BaseData):
         shares = shares.reindex(dividend.index, method='ffill')
 
         return dividend.divide(shares)
+
+    def __zDPS__(self, start, end):
+        dps = self.data('dps', start, end)
+
+        price = self.data('closeprice', start, end).ffill()
+        price = price.reindex(dps.index, method='ffill')
+
+        zprice = self.data('zprice', start, end).ffill()
+        zprice = zprice.reindex(dps.index, method='ffill')
+
+        return dps.divide(price).multiply(zprice)
 
     def __EP__(self, start, end):
         aprice = self.data('aprice', start, end).ffill()

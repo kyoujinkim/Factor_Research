@@ -1,0 +1,337 @@
+import os
+import pickle
+import shutil
+from glob import glob
+
+import bt
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+from src.loadData import DataProcessor
+from src.calcWeight_2v import WeightBuilder
+from src.calcER_2v import Calculator
+
+def calc_factor_weight(country, index):
+
+    bpath = f'./cache/{country}'
+
+    dp = DataProcessor()
+    dp.turnon_cache()
+
+    # 2. index별로 저장되어있는 index_master 불러오기
+    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    dp.load_stocks(index_master.columns)
+
+    factorlist = {'BM':'mktcap'
+        , 'SMB':'size'
+        , 'HML':'value'
+        , 'MOM':'momentum'
+        , 'OP':'profitability'
+        , 'INV':'investment'
+                  }
+
+    for key in factorlist.keys():
+
+        factor = factorlist[key]
+        data_list = ['mktcap', 'return']
+        data_list.append(factor)
+
+        # build data
+        for data in tqdm(data_list):
+            dp.build_data(bpath, data, None, None)
+
+        wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
+        if key == 'BM':
+            w = wb.run(start=None
+                          , end=None
+                          , weighting_method='mktcap'
+                          , weight_limit=0.3
+                          , base_path=bpath
+                          , workers=os.cpu_count()-3
+                          , active_multiproc=True)
+        else:
+            w = wb.run(start=None
+                       , end=None
+                       , weighting_method='longshort'
+                       , factor=factor
+                       , factor_n=0.2
+                       , base_path=bpath
+                       , workers=os.cpu_count()-3
+                       , active_multiproc=True)
+
+        w.to_csv(f'./weight/{country}/factor_weight/{key}.csv')
+
+    # initialize
+    dp.turnoff_cache()
+    dp.unload_stocks()
+
+    return True
+
+def run_bt(factor, w, p, d, date_range:str=None):
+    # drop if data is less than 50
+    w = w.dropna(thresh=50)
+    p = p.ffill().bfill()
+    d = d.fillna(0)
+
+    if date_range is not None:
+        w = w[(w.index >= date_range)]
+
+    w_info = [factor, w.index[0], p.index[-1]]
+
+    unique_code = list(set(w.columns)&set(p.columns)&set(d.columns))
+
+    w = w[unique_code]
+
+    p_bt = p[(p.index >= w_info[1]) * (p.index <= w_info[2])][unique_code]
+    d_bt = d[(d.index >= w_info[1]) * (d.index <= w_info[2])][unique_code]
+
+    securities = [bt.CouponPayingSecurity(name, fixed_income=False) for name in w.columns.values]
+    s = bt.Strategy(w_info[0]
+                    , [bt.algos.WeighTarget(w)
+                    , bt.algos.Rebalance()
+                    ]
+                    , children=securities
+                    )
+
+    t = bt.Backtest(s, p_bt
+                    , integer_positions=False
+                    #, commissions=lambda q, p: abs(q) * p * 0.00215
+                    , additional_data={'coupons': d_bt}
+                    , progress_bar=True
+                    ,
+                    )
+
+    return t
+
+def calc_factor_index(country, index, factor_list):
+
+    bpath = f'./cache/{country}'
+
+    dp = DataProcessor()
+    dp.turnon_cache()
+
+    # 2. index별로 저장되어있는 index_master 불러오기
+    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    dp.load_stocks(index_master.columns)
+
+    for data in tqdm(['zprice','zdps']):
+        dp.build_data(bpath, data, None, None)
+
+    # load price
+    p = pd.read_parquet(f'{bpath}/zprice.parquet', engine='pyarrow')
+    # load div
+    d = pd.read_parquet(f'{bpath}/zdps.parquet', engine='pyarrow')
+
+    '''load weight'''
+    factor_ts = []
+    for factor in factor_list:
+        weight = pd.read_csv(f'./weight/{country}/factor_weight/{factor}.csv', index_col=0, parse_dates=True)
+        res = bt.run(run_bt(factor, weight, p, d))
+        res.prices.to_csv(f'./output/{country}/bm/{factor}.csv')
+        factor_ts.append(res.prices)
+
+    factor_ts = pd.concat(factor_ts, axis=1)
+    factor_ts.to_csv(f'output/0.export/{country}/factor_ts.csv')
+
+    return True
+
+def save_pickle(data, filepath):
+    with open(filepath, 'wb') as f:
+        pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
+
+def calculate_Expected_Return(country, index, model, avg_window, window, end: str = None, calc_all:bool=False):
+    '''
+    기대수익률을 계산
+
+    :param country: 국가명
+    :param model: 모델명 abbreviation (e.g. CAPM, ff5 ...)
+    :param avg_window: 미래 팩터 수익률로 사용하기 위한 평균값 window
+    :param window: 회귀계수를 계산하기 위한 데이터 window
+    :param end: 기대수익률을 계산할 최종날짜
+    :return:
+    '''
+
+    basewindow = window+2  # 넉넉하게 부여
+    print(f'country: {country}')
+
+    dp = DataProcessor()
+    dp.turnon_cache()
+
+    # 2. index별로 저장되어있는 index_master 불러오기
+    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    dp.load_stocks(index_master.columns)
+
+    for data in tqdm(['zprice']):
+        dp.build_data(f'./cache/{country}', data, None, None)
+
+    # load price
+    p = pd.read_parquet(f'./cache/{country}/zprice.parquet', engine='pyarrow')
+    rf = pd.read_excel(f'D:/Factor_DB/rf.xlsx', sheet_name='rf', index_col=0, parse_dates=True)[[country]].iloc[1:].astype(float)
+    rf.index = pd.to_datetime(rf.index)
+
+    # load factor data
+    bm = pd.read_csv(f'./output/{country}/bm/BM.csv', dtype=float, index_col=0, parse_dates=True)
+    smb = pd.read_csv(f'./output/{country}/bm/SMB.csv', dtype=float, index_col=0, parse_dates=True)
+    hml = pd.read_csv(f'./output/{country}/bm/HML.csv', dtype=float, index_col=0, parse_dates=True)
+    mom = pd.read_csv(f'./output/{country}/bm/MOM.csv', dtype=float, index_col=0, parse_dates=True)
+    op = pd.read_csv(f'./output/{country}/bm/OP.csv', dtype=float, index_col=0, parse_dates=True)
+    inv = pd.read_csv(f'./output/{country}/bm/INV.csv', dtype=float, index_col=0, parse_dates=True)
+
+    cal = Calculator(index=index_master, price=p,  rf=rf, bm=bm)
+
+    c = cal.run_snapshot(method=model, resample='M', basewindow=basewindow, window=window, mom= mom, hml=hml, smb=smb, op=op, inv=inv, avg_window=avg_window, end=end)
+    betas = cal.run_snapshot(method='ff6', resample='M', basewindow=basewindow, window=window, mom= mom, hml=hml, smb=smb, op=op, inv=inv, avg_window=avg_window, end=end, view_betas=True)
+
+    c.to_csv(f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m_snapshot{c.name.strftime("%Y-%m-%d")}.csv')
+    betas.to_csv(f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m_snapshot_betas_{c.name.strftime("%Y-%m-%d")}.csv')
+
+    if calc_all:
+        c_ts = cal.run(method=model, resample='M', basewindow=basewindow, window=window, mom= mom, hml=hml, smb=smb, op=op, inv=inv, avg_window=avg_window)
+        save_pickle(c_ts, f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m.pkl')
+
+    return c.name.strftime("%Y-%m-%d")
+
+def groupER(snapdate, country, index, model, avg_window, lr_window, industry_length=2, mktpct=0.7):
+    '''
+    make formatted output for Expected Return
+    :param snapdate: date of snapshot
+    :param country: country name(korea, us, japan, europe)
+    :param model: model name(capm, sr2, ch4)
+    :param avg_window: average window
+    :param lr_window: long term window
+    :param industry_length: length of industry code(korea: 2, others: 1)
+    :param mktpct: market value percentile(larger than x)
+    :return: None
+    '''
+
+    ER_path = f'./output/{country}/Expected_Return/{model}_{avg_window}m_{lr_window}m_snapshot{snapdate}.csv'
+    Beta_path = f'./output/{country}/Expected_Return/{model}_{avg_window}m_{lr_window}m_snapshot_betas_{snapdate}.csv'
+
+    ER = pd.read_csv(ER_path, index_col=0, dtype=float, parse_dates=True) * 100
+    ER.columns = ['ER']
+    ER = ER.sort_values('ER', ascending=False)[5:-5]
+
+    dp = DataProcessor()
+    dp.turnon_cache()
+
+    # 2. index별로 저장되어있는 index_master 불러오기
+    dp.load_stocks(ER.index)
+
+    mktval = dp.data('mktcap', end=snapdate).iloc[-1]
+    vol = dp.data('return', end=snapdate).iloc[-52:].std() * np.sqrt(4)
+    industry = dp.tag('sector')
+    industry = industry[industry.sector!='<NA>']
+
+    ER['Vol'] = vol
+    ER['Sharpe'] = ER.ER / ER.Vol
+
+    mktval_percentile = mktval.rank(pct=True)
+
+    ER['mktval'] = mktval
+    ER['mktvalER'] = ER['ER'] * ER['mktval']
+    if country == 'korea':
+        sector_length = industry_length+1
+    else:
+        sector_length = industry_length
+    ER['industry'] = industry.sector.str[:sector_length]
+
+    Beta = pd.read_csv(Beta_path, index_col=0, dtype=float, parse_dates=True)
+    Beta = Beta.loc[ER.index]
+    Beta['mktval'] = mktval
+    Beta['industry'] = industry.sector.str[:sector_length]
+
+    #calculate ER weighted by market value
+    weighted_ER = ER['mktvalER'].sum() / ER['mktval'].sum()
+    mean_ER = ER['ER'].mean()
+    #calculate mktval weighted ER by size group (quantile)
+    ER['size'] = pd.qcut(ER['mktval'], 3, labels=['small', 'mid', 'large'])
+    size_ER = ER.groupby('size')['mktvalER'].sum() / ER.groupby('size')['mktval'].sum()
+    size_mean_ER = ER.groupby('size')['ER'].mean()
+    #calculate mktval weighted ER by industry group
+    industry_ER = ER.groupby('industry')['mktvalER'].sum() / ER.groupby('industry')['mktval'].sum()
+    industry_mean_ER = ER.groupby('industry')['ER'].mean()
+    industry_beta = Beta.groupby('industry').mean()
+
+    #calculate factor return
+    factor_result = []
+    factor_weights = glob(f'./weight/{country}/factor_weight/*.csv')
+    for weight in factor_weights:
+        if 'equBM' in weight:
+            continue
+        factor_name = weight.split('\\')[-1].split('.')[0]
+        curr_weight = pd.read_csv(weight, index_col=0, parse_dates=True).iloc[-1].dropna()
+        ER[factor_name] = curr_weight
+        factor_result.append([factor_name, (ER[factor_name] * ER['ER']).sum()])
+    factor_result = pd.DataFrame(factor_result, columns=['factor', 'factor_return'])
+
+    tempER = ER.copy()
+    tempER['mktvalpct'] = mktval_percentile.copy()
+    tempER = tempER[tempER.mktvalpct >= mktpct]
+
+    ERtop10 = tempER.sort_values('Sharpe', ascending=False).head(20)
+    ERbot10 = tempER.sort_values('Sharpe', ascending=True).head(20)
+
+    result_dict = {
+        'total_ER': ER
+        , 'beta': Beta
+        , 'wmean_ER': pd.DataFrame([weighted_ER, mean_ER], index=['wmean_ER', 'mean_ER'], columns=['Index Expected Return'])
+        , 'size_ER': pd.concat([size_ER,size_mean_ER], axis=1)
+        , 'industry_ER': pd.concat([industry_ER,industry_mean_ER,industry_beta], axis=1)
+        , 'factor_result': factor_result
+        , 'ERtop+bot10': pd.concat([ERtop10, ERbot10], axis=0)[['industry', 'mktval','size', 'ER', 'Vol', 'Sharpe']]
+    }
+
+    weight_path = f'./output/0.export/{country}'
+    if not os.path.exists(weight_path):
+        os.makedirs(weight_path)
+
+    #save each result in to csv file
+    for key, value in result_dict.items():
+        value.to_csv(f'./output/0.export/{country}/{key}.csv')
+
+
+if __name__ == '__main__':
+    country_list = [
+        ['us','RAY']
+        , ['europe','SXXP']
+        , ['japan','TPX500']
+    ]
+
+    # initialize data
+    for country, index in country_list:
+        bpath = f'./cache/{country}'
+        #shutil.rmtree(bpath, ignore_errors=True)
+        os.makedirs(bpath, exist_ok=True)
+
+    # 1. Calculate Factor Index
+    ## 1-1. Calculate Factor Index Weight
+    print('Start Calculate Factor Index Weight')
+    #for country in country_list:
+    #    calc_factor_weight(*country)
+
+    ## 1-2. Calculate Factor Index
+    print('Start Calculate Factor Index')
+    #for country in country_list:
+    #    calc_factor_index(*country, factor_list=['BM', 'HML', 'SMB', 'MOM', 'OP', 'INV'])
+
+    # 2. Calculate Expected Return
+    print('Calculate Expected Return')
+    model_list = [
+        ['us', 'RAY', 'ch4', 3, 12, None]
+        , ['japan', 'TPX500', 'sr2', 6, 60, None]
+        , ['europe', 'SXXP', 'capm', 6, 12, None]
+        ]
+
+    for country_model in model_list:
+        snapdate = calculate_Expected_Return(*country_model, calc_all=True)
+
+    #snapdate = '2025-04-30'
+    print('Calculate Formatted Expected return')
+    model_list = [
+        [snapdate, 'us', 'RAY', 'ch4', 3, 12, 2, 0.7]
+        , [snapdate, 'japan', 'TPX500', 'sr2', 6, 60, 2, 0.9]
+        , [snapdate, 'europe', 'SXXP', 'capm', 6, 12, 2, 0.7]
+        ]
+    for country_model in model_list:
+        groupER(*country_model)
