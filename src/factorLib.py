@@ -51,3 +51,13 @@ def profitability(ts):
     :return: ROE
     '''
     return ts
+
+def rev(ts, term):
+    '''
+    Revenue 계산
+    :param rev: 매출액 데이터
+    :return: Rev
+    '''
+    ts = - (1+ts).cumprod().pct_change(term)
+
+    return ts

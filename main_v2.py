@@ -11,8 +11,9 @@ from tqdm import tqdm
 from src.loadData import DataProcessor
 from src.calcWeight_2v import WeightBuilder
 from src.calcER_2v import Calculator
+from src.backtest import run_bt
 
-def calc_factor_weight(country, index):
+def calc_factor_weight(country, index, factorlist):
 
     bpath = f'./cache/{country}'
 
@@ -22,14 +23,6 @@ def calc_factor_weight(country, index):
     # 2. index별로 저장되어있는 index_master 불러오기
     index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
     dp.load_stocks(index_master.columns)
-
-    factorlist = {'BM':'mktcap'
-        , 'SMB':'size'
-        , 'HML':'value'
-        , 'MOM':'momentum'
-        , 'OP':'profitability'
-        , 'INV':'investment'
-                  }
 
     for key in factorlist.keys():
 
@@ -68,43 +61,7 @@ def calc_factor_weight(country, index):
 
     return True
 
-def run_bt(factor, w, p, d, date_range:str=None):
-    # drop if data is less than 50
-    w = w.dropna(thresh=50)
-    p = p.ffill().bfill()
-    d = d.fillna(0)
-
-    if date_range is not None:
-        w = w[(w.index >= date_range)]
-
-    w_info = [factor, w.index[0], p.index[-1]]
-
-    unique_code = list(set(w.columns)&set(p.columns)&set(d.columns))
-
-    w = w[unique_code]
-
-    p_bt = p[(p.index >= w_info[1]) * (p.index <= w_info[2])][unique_code]
-    d_bt = d[(d.index >= w_info[1]) * (d.index <= w_info[2])][unique_code]
-
-    securities = [bt.CouponPayingSecurity(name, fixed_income=False) for name in w.columns.values]
-    s = bt.Strategy(w_info[0]
-                    , [bt.algos.WeighTarget(w)
-                    , bt.algos.Rebalance()
-                    ]
-                    , children=securities
-                    )
-
-    t = bt.Backtest(s, p_bt
-                    , integer_positions=False
-                    #, commissions=lambda q, p: abs(q) * p * 0.00215
-                    , additional_data={'coupons': d_bt}
-                    , progress_bar=True
-                    ,
-                    )
-
-    return t
-
-def calc_factor_index(country, index, factor_list):
+def calc_factor_index(country, index, factorlist):
 
     bpath = f'./cache/{country}'
 
@@ -125,9 +82,9 @@ def calc_factor_index(country, index, factor_list):
 
     '''load weight'''
     factor_ts = []
-    for factor in factor_list:
+    for factor in factorlist:
         weight = pd.read_csv(f'./weight/{country}/factor_weight/{factor}.csv', index_col=0, parse_dates=True)
-        res = bt.run(run_bt(factor, weight, p, d))
+        res = bt.run(run_bt(factor, weight, p, d, thresh=50))
         res.prices.to_csv(f'./output/{country}/bm/{factor}.csv')
         factor_ts.append(res.prices)
 
@@ -140,7 +97,7 @@ def save_pickle(data, filepath):
     with open(filepath, 'wb') as f:
         pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
 
-def calculate_Expected_Return(country, index, model, avg_window, window, end: str = None, calc_all:bool=False):
+def calculate_Expected_Return(country, index, model, avg_window, window, factors, end: str = None, calc_all:bool=False):
     '''
     기대수익률을 계산
 
@@ -169,25 +126,23 @@ def calculate_Expected_Return(country, index, model, avg_window, window, end: st
     p = pd.read_parquet(f'./cache/{country}/zprice.parquet', engine='pyarrow')
     rf = pd.read_excel(f'D:/Factor_DB/rf.xlsx', sheet_name='rf', index_col=0, parse_dates=True)[[country]].iloc[1:].astype(float)
     rf.index = pd.to_datetime(rf.index)
+    bm = pd.read_csv(f'./output/{country}/bm/BM.csv', dtype=float, index_col=0, parse_dates=True)
 
     # load factor data
-    bm = pd.read_csv(f'./output/{country}/bm/BM.csv', dtype=float, index_col=0, parse_dates=True)
-    smb = pd.read_csv(f'./output/{country}/bm/SMB.csv', dtype=float, index_col=0, parse_dates=True)
-    hml = pd.read_csv(f'./output/{country}/bm/HML.csv', dtype=float, index_col=0, parse_dates=True)
-    mom = pd.read_csv(f'./output/{country}/bm/MOM.csv', dtype=float, index_col=0, parse_dates=True)
-    op = pd.read_csv(f'./output/{country}/bm/OP.csv', dtype=float, index_col=0, parse_dates=True)
-    inv = pd.read_csv(f'./output/{country}/bm/INV.csv', dtype=float, index_col=0, parse_dates=True)
+    factor_dict = {}
+    for f in factors:
+        factor_dict[f] = pd.read_csv(f'./output/{country}/bm/{f.upper()}.csv', dtype=float, index_col=0, parse_dates=True)
 
     cal = Calculator(index=index_master, price=p,  rf=rf, bm=bm)
 
-    c = cal.run_snapshot(method=model, resample='M', basewindow=basewindow, window=window, mom= mom, hml=hml, smb=smb, op=op, inv=inv, avg_window=avg_window, end=end)
-    betas = cal.run_snapshot(method='ff6', resample='M', basewindow=basewindow, window=window, mom= mom, hml=hml, smb=smb, op=op, inv=inv, avg_window=avg_window, end=end, view_betas=True)
+    c = cal.run_snapshot(method=model, resample='M', basewindow=basewindow, window=window, factors=factor_dict, avg_window=avg_window, end=end)
+    betas = cal.run_snapshot(method='ff6', resample='M', basewindow=basewindow, window=window, factors=factor_dict, avg_window=avg_window, end=end, view_betas=True)
 
     c.to_csv(f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m_snapshot{c.name.strftime("%Y-%m-%d")}.csv')
     betas.to_csv(f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m_snapshot_betas_{c.name.strftime("%Y-%m-%d")}.csv')
 
     if calc_all:
-        c_ts = cal.run(method=model, resample='M', basewindow=basewindow, window=window, mom= mom, hml=hml, smb=smb, op=op, inv=inv, avg_window=avg_window)
+        c_ts = cal.run(method=model, resample='M', basewindow=basewindow, window=window, factors=factor_dict, avg_window=avg_window)
         save_pickle(c_ts, f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m.pkl')
 
     return c.name.strftime("%Y-%m-%d")
@@ -301,37 +256,45 @@ if __name__ == '__main__':
     # initialize data
     for country, index in country_list:
         bpath = f'./cache/{country}'
-        #shutil.rmtree(bpath, ignore_errors=True)
+        shutil.rmtree(bpath, ignore_errors=True)
         os.makedirs(bpath, exist_ok=True)
 
     # 1. Calculate Factor Index
     ## 1-1. Calculate Factor Index Weight
     print('Start Calculate Factor Index Weight')
-    #for country in country_list:
-    #    calc_factor_weight(*country)
+    for country in country_list:
+        calc_factor_weight(*country,
+                           factorlist={'BM': 'mktcap'
+                               , 'SMB': 'size'
+                               , 'HML': 'value'
+                               , 'MOM': 'momentum'
+                               , 'OP': 'profitability'
+                               , 'INV': 'investment'
+                                       }
+                           )
 
     ## 1-2. Calculate Factor Index
     print('Start Calculate Factor Index')
-    #for country in country_list:
-    #    calc_factor_index(*country, factor_list=['BM', 'HML', 'SMB', 'MOM', 'OP', 'INV'])
+    for country in country_list:
+        calc_factor_index(*country, factorlist=['BM', 'HML', 'SMB', 'MOM', 'OP', 'INV'])
 
     # 2. Calculate Expected Return
     print('Calculate Expected Return')
     model_list = [
-        ['us', 'RAY', 'ch4', 3, 12, None]
-        , ['japan', 'TPX500', 'sr2', 6, 60, None]
-        , ['europe', 'SXXP', 'capm', 6, 12, None]
+        ['us', 'RAY', 'ch4', 3, 12, ['bm', 'hml','smb','mom','op','inv']]
+        , ['japan', 'TPX500', 'capm', 3, 60, ['bm', 'hml','smb','mom','op','inv']]
+        , ['europe', 'SXXP', 'capm', 6, 12, ['bm', 'hml','smb','mom','op','inv']]
         ]
 
     for country_model in model_list:
-        snapdate = calculate_Expected_Return(*country_model, calc_all=True)
+        snapdate = calculate_Expected_Return(*country_model, end=None, calc_all=True)
 
     #snapdate = '2025-04-30'
     print('Calculate Formatted Expected return')
     model_list = [
-        [snapdate, 'us', 'RAY', 'ch4', 3, 12, 2, 0.7]
-        , [snapdate, 'japan', 'TPX500', 'sr2', 6, 60, 2, 0.9]
-        , [snapdate, 'europe', 'SXXP', 'capm', 6, 12, 2, 0.7]
+        [snapdate, 'us', 'RAY', 'ch4', 3, 12, 2, 0.3]
+        , [snapdate, 'japan', 'TPX500', 'capm', 3, 60, 2, -1]
+        , [snapdate, 'europe', 'SXXP', 'capm', 6, 12, 2, -1]
         ]
     for country_model in model_list:
         groupER(*country_model)

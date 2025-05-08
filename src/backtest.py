@@ -1,9 +1,7 @@
-import shutil
 import warnings
 from glob import glob
 
 import pandas as pd
-import os
 import bt
 import src.loadData as ld
 
@@ -12,37 +10,40 @@ from tqdm import tqdm
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
-def run_bt(w, p, d, stname:str=None, date_range:str=None):
-    weight = w
+def run_bt(strat, w, p, d, date_range:str=None, thresh:int=0):
+    # drop if data is less than 50
+    w = w.dropna(thresh=thresh)
+
     if date_range is not None:
-        weight = weight[(weight.index >= date_range)]
+        w = w[(w.index >= date_range)]
 
-    weight_info = [stname, weight.index[0], p.index[-1]]
+    w_info = [strat, w.index[0], p.index[-1]]
 
-    price_bt = p[(p.index >= weight_info[1]) * (p.index <= weight_info[2])][weight.columns]
-    div_bt = d[(d.index >= weight_info[1]) * (d.index <= weight_info[2])][weight.columns]
+    unique_code = list(set(w.columns)&set(p.columns)&set(d.columns))
 
-    div_bt = div_bt.fillna(0)
-    price_bt = price_bt.ffill()
+    w = w[unique_code]
 
-    securities = [bt.CouponPayingSecurity(name, fixed_income=False) for name in weight.columns.values]
-    s = bt.Strategy(weight_info[0]
-                    , [bt.algos.WeighTarget(weight)
+    p_bt = p[(p.index >= w_info[1]) * (p.index <= w_info[2])][unique_code]
+    d_bt = d[(d.index >= w_info[1]) * (d.index <= w_info[2])][unique_code].reindex(p_bt.index, method='nearest')
+
+    securities = [bt.CouponPayingSecurity(name, fixed_income=False) for name in w.columns.values]
+    s = bt.Strategy(w_info[0]
+                    , [bt.algos.WeighTarget(w)
                     , bt.algos.Rebalance()
                     ]
                     , children=securities
                     )
 
-    t = bt.Backtest(s, price_bt
+    t = bt.Backtest(s, p_bt
                     , integer_positions=False
-                    #, initial_capital=100000000000# 매우 큰값으로 설정. 결과값에는 영향이 없으나, 단주/ 커미션 부족 등의 에러 방지
                     #, commissions=lambda q, p: abs(q) * p * 0.00215
-                    , additional_data={'coupons': div_bt}
+                    , additional_data={'coupons': d_bt}
                     , progress_bar=True
                     ,
                     )
 
     return t
+
 
 if __name__ == "__main__":
 
@@ -77,7 +78,7 @@ if __name__ == "__main__":
     bt_list = []
     for wp in wsp:
         w = pd.read_csv(wp, index_col=0, parse_dates=True)
-        bt_list.append(run_bt(w, p_r, dy, wp.split('\\')[-1].split('.')[0]))
+        bt_list.append(run_bt(wp, w, p_r, dy, wp.split('\\')[-1].split('.')[0]))
 
     res = bt.run(*bt_list)
     res.prices.to_csv(f'bt_plot.csv')

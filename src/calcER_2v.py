@@ -1,6 +1,8 @@
 import itertools
 import os
 import warnings
+from datetime import timedelta
+from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -28,7 +30,7 @@ class Calculator:
         else:
             self.bm_bd = bm.fillna(method='ffill')
 
-    def run(self, method:str, resample:str='M', window:int=12, **kwargs) -> list:
+    def run(self, method:str, factors:Dict={}, resample:str='M', window:int=12, **kwargs) -> list:
         '''
         날짜, 예측값, 실제값의 리스트를 반환하는 함수
         :param method: 예측값을 계산하는 방법
@@ -47,17 +49,19 @@ class Calculator:
         :return: 날짜, 예측값, 실제값의 리스트
         '''
 
-        self.price = self.price_bd.resample(resample).last()
-        self.rf = self.rf_bd.resample(resample).last()
-        self.bm = self.bm_bd.resample(resample).last()
+        port_dates = pd.date_range(start=self.price_bd.index[0], end=self.price_bd.index[-1], freq='W-FRI')
+        port_dates = pd.Series(port_dates, index=port_dates).resample(resample).last()
+        self.price = self.price_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
+        self.rf = self.rf_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
+        self.bm = self.bm_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
         basewindow = window + 2
 
+        self.factors = factors.copy()
+        for f in self.factors.keys():
+            self.factors[f] = self.factors[f].reindex(port_dates.values, method='ffill').dropna(how='all')
         #assign kwargs to self
         for key, value in kwargs.items():
             setattr(self, key, value)
-            #if value is dataframe, resample it
-            if isinstance(value, pd.DataFrame):
-                setattr(self, key, value.resample(resample).last())
         self.avg_window = kwargs.get('avg_window', 12)
 
         if resample=='M':
@@ -75,7 +79,7 @@ class Calculator:
 
         return result
 
-    def run_snapshot(self, method:str, resample:str='M', basewindow:int=24, window:int=12, view_betas:bool=False, end:str=None, **kwargs) -> pd.DataFrame:
+    def run_snapshot(self, method:str, factors:Dict={}, resample:str='M', basewindow:int=24, window:int=12, view_betas:bool=False, end:str=None, **kwargs) -> pd.DataFrame:
         '''
         지정된 모델에 대해 날짜별 예측값을 반환하는 함수
 
@@ -86,19 +90,21 @@ class Calculator:
         :param kwargs: additional arguments
         :return: dataframe of expected return
         '''
+        port_dates = pd.date_range(start=self.price_bd.index[0], end=self.price_bd.index[-1], freq='W-FRI')
+        port_dates = pd.Series(port_dates, index=port_dates).resample(resample).last()
         if end is not None:
-            self.price = self.price_bd[self.price_bd.index <= end].resample(resample).last()
+            self.price = self.price_bd[self.price_bd.index <= end].reindex(port_dates.values, method='ffill').dropna(how='all')
         else:
-            self.price = self.price_bd.resample(resample).last()
-        self.rf = self.rf_bd.resample(resample).last()
-        self.bm = self.bm_bd.resample(resample).last()
+            self.price = self.price_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
+        self.rf = self.rf_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
+        self.bm = self.bm_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
 
+        self.factors = factors.copy()
+        for f in self.factors.keys():
+            self.factors[f] = self.factors[f].reindex(port_dates.values, method='ffill').dropna(how='all')
         #assign kwargs to self
         for key, value in kwargs.items():
             setattr(self, key, value)
-            #if value is dataframe, resample it
-            if isinstance(value, pd.DataFrame):
-                setattr(self, key, value.resample(resample).last())
         self.avg_window = kwargs.get('avg_window', 12)
 
         if resample=='M':
@@ -128,26 +134,9 @@ class Calculator:
         temp_bm = self.bm[self.bm.index <= temp_date].iloc[-(basewindow + 1):]
 
         minimum_len = len(temp_price)
-        try:
-            temp_hml = self.hml[self.hml.index <= temp_date].iloc[-(basewindow + 1):]
-            minimum_len = min(minimum_len, len(temp_hml))
-        except: temp_hml = None
-        try:
-            temp_smb = self.smb[self.smb.index <= temp_date].iloc[-(basewindow + 1):]
-            minimum_len = min(minimum_len, len(temp_smb))
-        except: temp_smb = None
-        try:
-            temp_mom = self.mom[self.mom.index <= temp_date].iloc[-(basewindow + 1):]
-            minimum_len = min(minimum_len, len(temp_mom))
-        except: temp_mom = None
-        try:
-            temp_op = self.op[self.op.index <= temp_date].iloc[-(basewindow + 1):]
-            minimum_len = min(minimum_len, len(temp_op))
-        except: temp_op = None
-        try:
-            temp_inv = self.inv[self.inv.index <= temp_date].iloc[-(basewindow + 1):]
-            minimum_len = min(minimum_len, len(temp_inv))
-        except: temp_inv = None
+        for f in self.factors.keys():
+            self.factors[f] = self.factors[f][self.factors[f].index <= temp_date].iloc[-(basewindow + 1):]
+            minimum_len = min(minimum_len, len(self.factors[f]))
 
         if minimum_len != len(temp_price):
             return None
@@ -158,11 +147,7 @@ class Calculator:
                                 , price=temp_price
                                 , rf=temp_rf
                                 , bm=temp_bm
-                                , hml=temp_hml
-                                , smb=temp_smb
-                                , mom=temp_mom
-                                , op=temp_op
-                                , inv=temp_inv
+                                , factors=self.factors
                                 , view_betas=view_betas
                                 )
 
@@ -187,29 +172,34 @@ class Calculator:
         elif resample=='W':
             bday = 52
 
-        rtn = self.price_bd.resample('M').last().pct_change().dropna(how='all', axis=0)
-        rf = self.rf_bd.resample('M').last()
+        port_dates = pd.date_range(start=self.price_bd.index[0], end=self.price_bd.index[-1], freq='W-FRI')
+        port_dates = pd.Series(port_dates, index=port_dates).resample(resample).last()
+        price = self.price_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
+        rtn = price.pct_change().dropna(how='all', axis=0)
+        rf = self.rf_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
 
         result = []
         for d in tqdm(data, desc='evaluating'):
-            date = d.name + MonthEnd(1)
-            date_f = d.name + MonthEnd(window)
+            monthly_index = price[d.name:].index
+            if len(monthly_index) > 1:
+                date = monthly_index[1]
+                date_f = monthly_index[window]
 
-            monthly_rf = (1+rf.loc[date:date_f]).mean()**(1/bday)-1
-            a = rtn[d.index].loc[date:date_f].mean() - monthly_rf.values
+                monthly_rf = (1+rf.loc[date:date_f]).mean()**(1/bday)-1
+                a = rtn[d.index].loc[date:date_f].mean() - monthly_rf.values
 
-            msfe = self._msfe(a, d)
-            ic = self._corr(a, d, method=corr_method)
-            rankic = self._rankcorr(a, d, method=corr_method)
-            ir = self._ir(a, d)
+                msfe = self._msfe(a, d)
+                ic = self._corr(a, d, method=corr_method)
+                rankic = self._rankcorr(a, d, method=corr_method)
+                ir = self._ir(a, d)
 
-            result.append([d.name, msfe, ic, rankic, ir])
+                result.append([d.name, msfe, ic, rankic, ir])
 
         result_df = pd.DataFrame(result, columns=['Index', 'MSFE', 'IC', 'Rank_IC', 'IR']).set_index('Index')
         return result_df
 
     def calc_exp_rtn(self, method: str, bday:int, window:int
-                     , price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame
+                     , price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, factors:Dict
                      , **kwargs): #calc Expected Return
         '''
         method를 기준으로 기대수익률 계산
@@ -223,32 +213,39 @@ class Calculator:
         elif method == 'capm':
             exp_rtn, betas = self._capm(price, rf, bm, window, bday)
         elif method == 'ff3':
-            hml = kwargs.get('hml', None)
-            smb = kwargs.get('smb', None)
+            hml = factors.get('hml', None)
+            smb = factors.get('smb', None)
             if hml is None or smb is None:
                 raise ValueError('HML and SMB should be given for FF-3F method')
             exp_rtn, betas = self._ff3(price, rf, bm, hml, smb, window, bday)
         elif method == 'ch4':
-            hml = kwargs.get('hml', None)
-            smb = kwargs.get('smb', None)
-            mom = kwargs.get('mom', None)
+            hml = factors.get('hml', None)
+            smb = factors.get('smb', None)
+            mom = factors.get('mom', None)
             if hml is None or smb is None or mom is None:
                 raise ValueError('HML, SMB and MOM should be given for CH-4F method')
             exp_rtn, betas = self._ch4(price, rf, bm, hml, smb, mom, window, bday)
+        elif method == 'rv4':
+            hml = factors.get('hml', None)
+            smb = factors.get('smb', None)
+            rev = factors.get('rev', None)
+            if hml is None or smb is None or rev is None:
+                raise ValueError('HML, SMB and REV should be given for RV-4F method')
+            exp_rtn, betas = self._rv4(price, rf, bm, hml, smb, rev, window, bday)
         elif method == 'ff5':
-            hml = kwargs.get('hml', None)
-            smb = kwargs.get('smb', None)
-            op = kwargs.get('op', None)
-            inv = kwargs.get('inv', None)
+            hml = factors.get('hml', None)
+            smb = factors.get('smb', None)
+            op = factors.get('op', None)
+            inv = factors.get('inv', None)
             if hml is None or smb is None or op is None or inv is None:
                 raise ValueError('HML, SMB, OP and INV should be given for FF-5F method')
             exp_rtn, betas = self._ff5(price, rf, bm, hml, smb, op, inv, window, bday)
         elif method == 'ff6':
-            hml = kwargs.get('hml', None)
-            smb = kwargs.get('smb', None)
-            op = kwargs.get('op', None)
-            inv = kwargs.get('inv', None)
-            mom = kwargs.get('mom', None)
+            hml = factors.get('hml', None)
+            smb = factors.get('smb', None)
+            op = factors.get('op', None)
+            inv = factors.get('inv', None)
+            mom = factors.get('mom', None)
             if hml is None or smb is None or op is None or inv is None or mom is None:
                 raise ValueError('HML, SMB, OP, INV and MOM should be given for FF-6F method')
             exp_rtn, betas = self._ff6(price, rf, bm, hml, smb, op, inv, mom, window, bday)
@@ -422,6 +419,45 @@ class Calculator:
                            + betas_df.beta_hml * rtn_hml_pure.iloc[-self.avg_window:].mean().values
                            + betas_df.beta_smb * rtn_smb_pure.iloc[-self.avg_window:].mean().values
                            + betas_df.beta_mom * rtn_mom_pure.iloc[-self.avg_window:].mean().values)
+
+        # 6. 기대수익률 계산
+        return expected_return, betas_df
+
+    def _rv4(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, hml:pd.DataFrame, smb:pd.DataFrame, rev:pd.DataFrame, window:int, bday:int):
+        '''
+        Short-term reversal 4 Factor Model을 이용한 기대수익률 계산
+        :param periods: 기대수익률을 계산할 기간
+        :return: dataframe of expected return
+        '''
+        # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
+        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rf = (1+rf).iloc[-window:]**(1/bday)-1
+        rtn_pure = rtn - rf.values
+
+        # 2. bm 수익률(-rf) 계산
+        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rtn_bm_pure = rtn_bm - rf.values
+
+        # 3. hml, smb 수익률(-rf) 계산
+        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rtn_hml_pure = rtn_hml - rf.values
+        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rtn_smb_pure = rtn_smb - rf.values
+        rtn_rev = rev.pct_change(periods=1, fill_method=None).iloc[-window:]
+        rtn_rev_pure = rtn_rev - rf.values
+
+        # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
+        # 4. multivariate beta 계산
+        betas = []
+        for col in rtn_pure:
+            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml_pure, rtn_smb_pure, rtn_rev_pure)
+            betas.append(beta)
+        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb', 'beta_rev'])
+        expected_return = (betas_df.intercept
+                           + betas_df.beta_bm * rtn_bm_pure.iloc[-self.avg_window:].mean().values
+                           + betas_df.beta_hml * rtn_hml_pure.iloc[-self.avg_window:].mean().values
+                           + betas_df.beta_smb * rtn_smb_pure.iloc[-self.avg_window:].mean().values
+                           + betas_df.beta_rev * rtn_rev_pure.iloc[-self.avg_window:].mean().values)
 
         # 6. 기대수익률 계산
         return expected_return, betas_df

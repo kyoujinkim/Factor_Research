@@ -136,8 +136,12 @@ class WeightBuilder:
             return pd.DataFrame(index=[pdate])
 
         if weighting_method == 'equal':
+            if len(code_list) > 0 and factor is not None:
+                code_list, _ = WeightBuilder.__filter_by__(code_list, data_key, factor, pdate, factor_n)
             w = WeightBuilder.__weight_by__(code_list, 'equal')
         elif weighting_method == 'mktcap':
+            if len(code_list) > 0 and factor is not None:
+                code_list, _ = WeightBuilder.__filter_by__(code_list, data_key, factor, pdate, factor_n)
             w = WeightBuilder.__weight_by__(code_list, 'weight', mktcap_db)
         elif weighting_method == 'longshort':
             if factor is None:

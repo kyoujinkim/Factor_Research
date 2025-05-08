@@ -305,6 +305,11 @@ class DataProcessor(BaseData):
                 self.__cache_data__(cache_path, 'return', start_m, end, data_freq)
                 , lt=52, st=4)[start:end]
              .to_parquet(f'{cache_path}/momentum.parquet'))
+        elif data == 'reversal':
+            (flib.rev(
+                self.__cache_data__(cache_path, 'return', start_m, end, data_freq)
+                , term=4)[start:end]
+             .to_parquet(f'{cache_path}/reversal.parquet'))
         elif data == 'investment':
             (flib.investment(
                 self.__cache_data__(cache_path, 'totalassets', start_m, end, data_freq)
@@ -353,8 +358,8 @@ class DataProcessor(BaseData):
         else:
             if data == 'return':
                 (self.data(data, start=start, end=end).resample(data_freq).ffill() / 100).to_parquet(f'{cache_path}/{data}.parquet')
-            elif data in ['dividend', 'dps', 'dpsnorm', 'dy']:
-                self.data(data, start=start, end=end).resample(data_freq).max().to_parquet(f'{cache_path}/{data}.parquet')
+            elif data in ['dividend', 'dps', 'dpsnorm', 'dy', 'zdps']:
+                self.data(data, start=start, end=end).resample(data_freq).max().fillna(0).to_parquet(f'{cache_path}/{data}.parquet')
             else:
                 self.data(data, start=start, end=end).ffill().resample(data_freq).ffill().to_parquet(f'{cache_path}/{data}.parquet')
 
