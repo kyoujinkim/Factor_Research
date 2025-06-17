@@ -90,12 +90,12 @@ class Calculator:
         :param kwargs: additional arguments
         :return: dataframe of expected return
         '''
-        port_dates = pd.date_range(start=self.price_bd.index[0], end=self.price_bd.index[-1], freq='W-FRI')
+        if type(end)==str:
+            end = pd.to_datetime(end)
+        end = min(end, self.price_bd.index[-1]) if end is not None else self.price_bd.index[-1]
+        port_dates = pd.date_range(start=self.price_bd.index[0], end=end, freq='W-FRI')
         port_dates = pd.Series(port_dates, index=port_dates).resample(resample).last()
-        if end is not None:
-            self.price = self.price_bd[self.price_bd.index <= end].reindex(port_dates.values, method='ffill').dropna(how='all')
-        else:
-            self.price = self.price_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
+        self.price = self.price_bd[self.price_bd.index <= end].reindex(port_dates.values, method='ffill').dropna(how='all')
         self.rf = self.rf_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
         self.bm = self.bm_bd.reindex(port_dates.values, method='ffill').dropna(how='all')
 

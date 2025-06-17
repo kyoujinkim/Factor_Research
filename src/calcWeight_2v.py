@@ -64,7 +64,7 @@ class WeightBuilder:
             for pdate in port_dates]
 
         if active_multiproc:
-            weights = process_map(WeightBuilder.__calc_weight__, var, max_workers=workers)
+            weights = process_map(WeightBuilder.__calc_weight__, var, max_workers=workers, desc=f"Calculating Weights : {kwargs.get('base_path').split('/')[-1]} - {kwargs.get('factor', None)}")
         else:
             weights = [WeightBuilder.__calc_weight__(v) for v in var]
 
@@ -130,7 +130,7 @@ class WeightBuilder:
         if len(code_list)>0:
             code_list, _ = WeightBuilder.__filter_by_date__(code_list, data_key, 'return', pdate, 52)
         if len(code_list)>0:
-            code_list, mktcap_db = WeightBuilder.__filter_by__(code_list, data_key, 'mktcap', pdate, mktcap_n)
+            code_list, mktcap_db = WeightBuilder.__filter_by__(code_list, data_key, 'amktcap', pdate, mktcap_n)
 
         if len(code_list)==0:
             return pd.DataFrame(index=[pdate])

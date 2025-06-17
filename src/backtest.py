@@ -1,3 +1,5 @@
+import os
+import shutil
 import warnings
 from glob import glob
 
@@ -51,15 +53,15 @@ if __name__ == "__main__":
     dp.turnon_cache()
 
     # 1. index 선택
-    index = 'RAY'
+    index = 'MXCN'
 
     # 2. index별로 저장되어있는 index_master 불러오기
     index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
     dp.load_stocks(index_master.columns)
 
-    bpath = './cache/us'
-    #shutil.rmtree(bpath, ignore_errors=True)
-    #os.makedirs(bpath, exist_ok=True)
+    bpath = './cache/china'
+    shutil.rmtree(bpath, ignore_errors=True)
+    os.makedirs(bpath, exist_ok=True)
 
     data_list = ['return', 'closeprice', 'dps']
 

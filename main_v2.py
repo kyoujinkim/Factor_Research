@@ -15,6 +15,9 @@ from src.backtest import run_bt
 
 def calc_factor_weight(country, index, factorlist):
 
+    if not os.path.exists(f'./weight/{country}/factor_weight'):
+        os.makedirs(f'./weight/{country}/factor_weight')
+
     bpath = f'./cache/{country}'
 
     dp = DataProcessor()
@@ -27,7 +30,7 @@ def calc_factor_weight(country, index, factorlist):
     for key in factorlist.keys():
 
         factor = factorlist[key]
-        data_list = ['mktcap', 'return']
+        data_list = ['amktcap', 'returns']
         data_list.append(factor)
 
         # build data
@@ -63,6 +66,9 @@ def calc_factor_weight(country, index, factorlist):
 
 def calc_factor_index(country, index, factorlist):
 
+    if not os.path.exists(f'./output/{country}/bm'):
+        os.makedirs(f'./output/{country}/bm')
+
     bpath = f'./cache/{country}'
 
     dp = DataProcessor()
@@ -84,11 +90,11 @@ def calc_factor_index(country, index, factorlist):
     factor_ts = []
     for factor in factorlist:
         weight = pd.read_csv(f'./weight/{country}/factor_weight/{factor}.csv', index_col=0, parse_dates=True)
-        res = bt.run(run_bt(factor, weight, p, d, thresh=50))
+        res = bt.run(run_bt(factor, weight, p, d, thresh=30))
         res.prices.to_csv(f'./output/{country}/bm/{factor}.csv')
         factor_ts.append(res.prices)
 
-    factor_ts = pd.concat(factor_ts, axis=1)
+    factor_ts = pd.concat(factor_ts, axis=1).ffill()
     factor_ts.to_csv(f'output/0.export/{country}/factor_ts.csv')
 
     return True
@@ -108,6 +114,9 @@ def calculate_Expected_Return(country, index, model, avg_window, window, factors
     :param end: 기대수익률을 계산할 최종날짜
     :return:
     '''
+
+    if not os.path.exists(f'./output/{country}/Expected_Return'):
+        os.makedirs(f'./output/{country}/Expected_Return')
 
     basewindow = window+2  # 넉넉하게 부여
     print(f'country: {country}')
@@ -135,7 +144,7 @@ def calculate_Expected_Return(country, index, model, avg_window, window, factors
 
     cal = Calculator(index=index_master, price=p,  rf=rf, bm=bm)
 
-    c = cal.run_snapshot(method=model, resample='M', basewindow=basewindow, window=window, factors=factor_dict, avg_window=avg_window, end=end)
+    c = cal.run_snapshot(method=model, resample='W', basewindow=basewindow, window=window, factors=factor_dict, avg_window=avg_window, end=end)
     betas = cal.run_snapshot(method='ff6', resample='M', basewindow=basewindow, window=window, factors=factor_dict, avg_window=avg_window, end=end, view_betas=True)
 
     c.to_csv(f'./output/{country}/Expected_Return/{model}_{avg_window}m_{window}m_snapshot{c.name.strftime("%Y-%m-%d")}.csv')
@@ -147,7 +156,7 @@ def calculate_Expected_Return(country, index, model, avg_window, window, factors
 
     return c.name.strftime("%Y-%m-%d")
 
-def groupER(snapdate, country, index, model, avg_window, lr_window, industry_length=2, mktpct=0.7):
+def groupER(snapdate, country, model, avg_window, lr_window, industry_length=2, mktpct=0.7, factors=None):
     '''
     make formatted output for Expected Return
     :param snapdate: date of snapshot
@@ -173,8 +182,8 @@ def groupER(snapdate, country, index, model, avg_window, lr_window, industry_len
     # 2. index별로 저장되어있는 index_master 불러오기
     dp.load_stocks(ER.index)
 
-    mktval = dp.data('mktcap', end=snapdate).iloc[-1]
-    vol = dp.data('return', end=snapdate).iloc[-52:].std() * np.sqrt(4)
+    mktval = dp.data('amktcap', end=snapdate).iloc[-1]
+    vol = dp.data('returns', end=snapdate).iloc[-52:].std() * np.sqrt(4)
     industry = dp.tag('sector')
     industry = industry[industry.sector!='<NA>']
 
@@ -185,16 +194,12 @@ def groupER(snapdate, country, index, model, avg_window, lr_window, industry_len
 
     ER['mktval'] = mktval
     ER['mktvalER'] = ER['ER'] * ER['mktval']
-    if country == 'korea':
-        sector_length = industry_length+1
-    else:
-        sector_length = industry_length
-    ER['industry'] = industry.sector.str[:sector_length]
+    ER['industry'] = industry.sector.str[:industry_length]
 
     Beta = pd.read_csv(Beta_path, index_col=0, dtype=float, parse_dates=True)
     Beta = Beta.loc[ER.index]
     Beta['mktval'] = mktval
-    Beta['industry'] = industry.sector.str[:sector_length]
+    Beta['industry'] = industry.sector.str[:industry_length]
 
     #calculate ER weighted by market value
     weighted_ER = ER['mktvalER'].sum() / ER['mktval'].sum()
@@ -210,14 +215,11 @@ def groupER(snapdate, country, index, model, avg_window, lr_window, industry_len
 
     #calculate factor return
     factor_result = []
-    factor_weights = glob(f'./weight/{country}/factor_weight/*.csv')
-    for weight in factor_weights:
-        if 'equBM' in weight:
-            continue
-        factor_name = weight.split('\\')[-1].split('.')[0]
-        curr_weight = pd.read_csv(weight, index_col=0, parse_dates=True).iloc[-1].dropna()
-        ER[factor_name] = curr_weight
-        factor_result.append([factor_name, (ER[factor_name] * ER['ER']).sum()])
+    for factor in factors:
+        fpath = f'./weight/{country}/factor_weight/{factor}.csv'
+        curr_weight = pd.read_csv(fpath, index_col=0, parse_dates=True).iloc[-1].dropna()
+        ER[factor] = curr_weight
+        factor_result.append([factor, (ER[factor] * ER['ER']).sum()])
     factor_result = pd.DataFrame(factor_result, columns=['factor', 'factor_return'])
 
     tempER = ER.copy()
@@ -245,12 +247,14 @@ def groupER(snapdate, country, index, model, avg_window, lr_window, industry_len
     for key, value in result_dict.items():
         value.to_csv(f'./output/0.export/{country}/{key}.csv')
 
-
+start = None
 if __name__ == '__main__':
     country_list = [
-        ['us','RAY']
-        , ['europe','SXXP']
-        , ['japan','TPX500']
+        #['us','RAY'],
+        #['europe','SXXP'],
+        #['japan','TPX500'],
+        #['korea','KRX300'],
+        ['china', 'MXCN']
     ]
 
     # initialize data
@@ -264,37 +268,40 @@ if __name__ == '__main__':
     print('Start Calculate Factor Index Weight')
     for country in country_list:
         calc_factor_weight(*country,
-                           factorlist={'BM': 'mktcap'
+                           factorlist={'BM': 'amktcap'
                                , 'SMB': 'size'
                                , 'HML': 'value'
                                , 'MOM': 'momentum'
                                , 'OP': 'profitability'
                                , 'INV': 'investment'
+                               , 'REV': 'reversal'
                                        }
                            )
 
     ## 1-2. Calculate Factor Index
     print('Start Calculate Factor Index')
     for country in country_list:
-        calc_factor_index(*country, factorlist=['BM', 'HML', 'SMB', 'MOM', 'OP', 'INV'])
+        calc_factor_index(*country, factorlist=['BM', 'HML', 'SMB', 'MOM', 'OP', 'INV', 'REV'])
 
+    quit()
     # 2. Calculate Expected Return
     print('Calculate Expected Return')
     model_list = [
         ['us', 'RAY', 'ch4', 3, 12, ['bm', 'hml','smb','mom','op','inv']]
         , ['japan', 'TPX500', 'capm', 3, 60, ['bm', 'hml','smb','mom','op','inv']]
         , ['europe', 'SXXP', 'capm', 6, 12, ['bm', 'hml','smb','mom','op','inv']]
+        , ['korea', 'KRX300', 'sr2', 3, 60, ['bm', 'hml', 'smb', 'mom', 'op', 'inv']]
         ]
 
     for country_model in model_list:
         snapdate = calculate_Expected_Return(*country_model, end=None, calc_all=True)
-
-    #snapdate = '2025-04-30'
+    #snapdate = '2025-05-30'
     print('Calculate Formatted Expected return')
     model_list = [
-        [snapdate, 'us', 'RAY', 'ch4', 3, 12, 2, 0.3]
-        , [snapdate, 'japan', 'TPX500', 'capm', 3, 60, 2, -1]
-        , [snapdate, 'europe', 'SXXP', 'capm', 6, 12, 2, -1]
+        [snapdate, 'us', 'ch4', 3, 12, 4, 0.2]
+        , [snapdate, 'japan', 'capm', 3, 60, 4, -1]
+        , [snapdate, 'europe', 'capm', 6, 12, 4, -1]
+        , [snapdate, 'korea', 'sr2', 3, 60, 4, -1]
         ]
     for country_model in model_list:
-        groupER(*country_model)
+        groupER(*country_model, factors=['BM', 'HML', 'INV', 'MOM', 'OP', 'SMB'])

@@ -192,12 +192,12 @@ class DataProcessor(BaseData):
         else:
             raise ValueError(f"Data key '{data_key}' not found in data_master.")
 
-    def data(self, data_key: str, start: str = None, end: str = None, rolling=0):
+    def data(self, data_key: str, start: str = None, end: str = None, fy: bool = False, rolling=0):
         """
         Load data from the provided data key.
         data_key (str): The key of the data to load.
             - "closepirce" : close price
-            - "return" : return
+            - "returns" : return
             - "fyshares" : shares
             - "dividend" : dividend
             - "earnings" : earnings
@@ -227,6 +227,8 @@ class DataProcessor(BaseData):
 
         if data_key == 'mktpct':
             self.cache[data_key] = self.__mktpct__(start, end)
+        elif data_key == 'amktcap':
+            self.cache[data_key] = self.__amktcap__(start, end)
         elif data_key == 'aprice':
             self.cache[data_key] = self.__aprice__(start, end)
         elif data_key == 'zprice':
@@ -257,7 +259,8 @@ class DataProcessor(BaseData):
             filelist = glob(f'{BaseData.dbpath}/db/*_{data_key}.parquet')
             filelist = [file for file in filelist if file.split('\\')[-1].split('_')[0] in self.stock_list()]
 
-            query = f"""SELECT date, instrument, """
+            query = """SELECT date, fydate, instrument, """ if fy else """SELECT date, instrument, """
+            colsubset = 'fydate' if fy else data_key
 
             if rolling > 0:
                 query += f"""SUM({data_key}) OVER (ROWS BETWEEN {rolling} PRECEDING AND 0 FOLLOWING) {data_key} """
@@ -271,7 +274,7 @@ class DataProcessor(BaseData):
 
             self.cache[data_key] = data.drop_duplicates(['date', 'instrument'], keep='last').pivot(index='date',
                                                                                                    columns='instrument',
-                                                                                                   values=data_key)
+                                                                                                   values=colsubset)
 
         # if we arrived to final stack, delete cache and return value
         if self.cache['depth'] == len(inspect.stack()):
@@ -302,12 +305,12 @@ class DataProcessor(BaseData):
 
         if data == 'momentum':
             (flib.momentum(
-                self.__cache_data__(cache_path, 'return', start_m, end, data_freq)
+                self.__cache_data__(cache_path, 'returns', start_m, end, data_freq)
                 , lt=52, st=4)[start:end]
              .to_parquet(f'{cache_path}/momentum.parquet'))
         elif data == 'reversal':
             (flib.rev(
-                self.__cache_data__(cache_path, 'return', start_m, end, data_freq)
+                self.__cache_data__(cache_path, 'returns', start_m, end, data_freq)
                 , term=4)[start:end]
              .to_parquet(f'{cache_path}/reversal.parquet'))
         elif data == 'investment':
@@ -356,7 +359,7 @@ class DataProcessor(BaseData):
         if os.path.exists(f'{cache_path}/{data}.parquet'):
             pass
         else:
-            if data == 'return':
+            if data == 'returns':
                 (self.data(data, start=start, end=end).resample(data_freq).ffill() / 100).to_parquet(f'{cache_path}/{data}.parquet')
             elif data in ['dividend', 'dps', 'dpsnorm', 'dy', 'zdps']:
                 self.data(data, start=start, end=end).resample(data_freq).max().fillna(0).to_parquet(f'{cache_path}/{data}.parquet')
@@ -383,6 +386,12 @@ class DataProcessor(BaseData):
 
         return data.drop_duplicates(['date', 'instrument'], keep='last').pivot(index='date', columns='instrument', values='split')
 
+    def __amktcap__(self, start, end):
+        mktcap = self.data('mktcap', start, end).ffill()
+        ffpct = self.data('freefloatpct', start, end).ffill().bfill().reindex(mktcap.index, method='ffill')
+
+        return mktcap.multiply(ffpct/100)
+
     def __mktpct__(self, start, end):
         shares = (self.data('fyshares', start, end) * 1E3).ffill()
         mktcap = (self.data('mktcap', start, end) * 1E6).ffill()
@@ -404,7 +413,7 @@ class DataProcessor(BaseData):
         return closeprice
 
     def __zprice__(self, start, end):
-        rtn = self.data('return', start, end)
+        rtn = self.data('returns', start, end)
         zprice = (1 + rtn/100).cumprod()
 
         return zprice
@@ -536,7 +545,7 @@ if __name__ == '__main__':
     index = 'RAY'
 
     # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'C:/Users/gklb/factor_db/members/master_{index}.parquet', engine='pyarrow')
+    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
     curr_index = index_master.iloc[-1:].dropna(axis=1)
     dp.load_stocks(curr_index.columns)
 
