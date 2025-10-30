@@ -63,6 +63,7 @@ class Calculator:
         for key, value in kwargs.items():
             setattr(self, key, value)
         self.avg_window = kwargs.get('avg_window', 12)
+        view_betas = kwargs.get('view_betas', False)
 
         if resample=='M':
             bday = 12
@@ -74,7 +75,7 @@ class Calculator:
         #result = []
         #for i in tqdm(range(basewindow+1, len(self.price))):
         #    result.append(self._iterrun([method, bday, basewindow, window, i, False]))
-        iterator = list(itertools.product([method], [bday], [basewindow], [window], range(basewindow+1, len(self.price)+1), [False]))
+        iterator = list(itertools.product([method], [bday], [basewindow], [window], range(basewindow+1, len(self.price)+1), [view_betas]))
         result = process_map(self._iterrun, iterator, max_workers=os.cpu_count()-2)
 
         return result
@@ -118,6 +119,35 @@ class Calculator:
 
         return result
 
+    @staticmethod
+    def _check_factors(method, factor):
+        if method == 'capm':
+            if factor in ['bm']:
+                return True
+        elif method == 'ff3':
+            if factor in ['bm', 'hml', 'smb']:
+                return True
+        elif method == 'ff5':
+            if factor in ['bm', 'hml', 'smb', 'op', 'inv']:
+                return True
+        elif method == 'ff6':
+            if factor in ['bm', 'hml', 'smb', 'op', 'inv', 'mom']:
+                return True
+        elif method == 'ch4':
+            if factor in ['bm', 'hml', 'smb', 'mom']:
+                return True
+        elif method == 'rv4':
+            if factor in ['bm', 'hml', 'smb', 'rev']:
+                return True
+        elif method == 'sr2':
+            if factor in ['bm']:
+                return True
+        elif method == 'mean':
+            return True
+
+        return False
+
+
     def _iterrun(self, var):
 
         method, bday, basewindow, window, i, view_betas = var
@@ -135,8 +165,9 @@ class Calculator:
 
         minimum_len = len(temp_price)
         for f in self.factors.keys():
-            self.factors[f] = self.factors[f][self.factors[f].index <= temp_date].iloc[-(basewindow + 1):]
-            minimum_len = min(minimum_len, len(self.factors[f]))
+            if Calculator._check_factors(method, f):
+                self.factors[f] = self.factors[f][self.factors[f].index <= temp_date].iloc[-(basewindow + 1):]
+                minimum_len = min(minimum_len, len(self.factors[f]))
 
         if minimum_len != len(temp_price):
             return None
@@ -151,7 +182,10 @@ class Calculator:
                                 , view_betas=view_betas
                                 )
 
-        result.name = temp_price.index[-1]
+        if type(result) == pd.Series:
+            result.name = temp_price.index[-1]
+        if type(result) == pd.DataFrame:
+            result.index.name = temp_price.index[-1]
 
         return result
 
@@ -584,10 +618,9 @@ class Calculator:
 
         sign_rev1 = sign1.apply(lambda x: False if x > 0 else True)
         sign_rev2 = sign2.apply(lambda x: False if x > 0 else True)
-        sign_rev3 = sign3.apply(lambda x: False if x > 0 else True)
 
         # concatenate signals
-        sign_rev = (sign_rev1 | sign_rev2 | sign_rev3)
+        sign_rev = (sign_rev1 | sign_rev2)
 
         expected_return = (
                 + betas_df.intercept
@@ -596,6 +629,8 @@ class Calculator:
 
         result = pd.concat([expected_return, sign_rev], axis=1)
         result.columns = ['ER', 'Sign']
+
+        betas_df['beta_sr'] = sign_rev.astype(int)
 
         #ER_mean = result.ER.mean()
 
