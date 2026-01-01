@@ -176,7 +176,7 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
 
     ER = pd.read_csv(ER_path, index_col=0, dtype=float, parse_dates=True) * 100
     ER.columns = ['ER']
-    ER = ER.sort_values('ER', ascending=False)[5:-5]
+    ER = ER.sort_values('ER', ascending=False)#[5:-5]
 
     dp = DataProcessor()
     dp.turnon_cache()
@@ -270,10 +270,10 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
 start = None
 if __name__ == '__main__':
     country_list = [
-        #['us','RAY'],
-        #['europe','SXXP'],
-        #['japan','TPX500'],
-        #['korea','KRX300'],
+        ['us','RAY'],
+        ['europe','SXXP'],
+        ['japan','TPX500'],
+        ['korea','KRX300'],
         ['china', 'MXCN']
     ]
 
@@ -307,23 +307,22 @@ if __name__ == '__main__':
     # 2. Calculate Expected Return
     print('Calculate Expected Return')
     model_list = [
-        #['us', 'RAY', 'ch4', 3, 12, ['bm', 'hml','smb','mom','op','inv']],
-        #['japan', 'TPX500', 'capm', 3, 60, ['bm', 'hml','smb','mom','op','inv']],
-        #['europe', 'SXXP', 'capm', 6, 12, ['bm', 'hml','smb','mom','op','inv']],
-        #['korea', 'KRX300', 'sr2', 3, 60, ['bm', 'hml', 'smb', 'mom', 'op', 'inv']],
+        ['us', 'RAY', 'ch4', 3, 12, ['bm', 'hml','smb','mom','op','inv']],
+        ['japan', 'TPX500', 'capm', 3, 60, ['bm', 'hml','smb','mom','op','inv']],
+        ['europe', 'SXXP', 'capm', 6, 12, ['bm', 'hml','smb','mom','op','inv']],
+        ['korea', 'KRX300', 'sr2', 3, 60, ['bm', 'hml', 'smb', 'mom', 'op', 'inv']],
         ['china', 'MXCN', 'ff3', 12, 60, ['bm', 'hml', 'smb', 'mom', 'op', 'inv']],
         ]
 
     for country_model in model_list:
         snapdate = calculate_Expected_Return(*country_model, end=None, calc_all=True)
 
-
     print('Calculate Formatted Expected return')
     model_list = [
-        #[snapdate, 'us', 'ch4', 3, 12, 0.7],
-        #[snapdate, 'japan', 'capm', 3, 60, -1],
-        #[snapdate, 'europe', 'capm', 6, 12, -1],
-        #[snapdate, 'korea', 'sr2', 3, 60, -1],
+        [snapdate, 'us', 'ch4', 3, 12, 0.7],
+        [snapdate, 'japan', 'capm', 3, 60, -1],
+        [snapdate, 'europe', 'capm', 6, 12, -1],
+        [snapdate, 'korea', 'sr2', 3, 60, -1],
         [snapdate, 'china', 'ff3', 12, 60, -1],
         ]
     for country_model in model_list:
