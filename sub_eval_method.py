@@ -53,7 +53,8 @@ def calculate_Expected_Return(country, index, model, windows: List, end: str = N
                'mom':'MOM',
                'op':'OP',
                'inv':'INV',
-               'rev':'REV'
+               'rev':'REV',
+               'hs':'HS',
                }
     factor_dict = {}
     for f in factors:
@@ -73,12 +74,14 @@ def calculate_Expected_Return(country, index, model, windows: List, end: str = N
     return res_data
 
 if __name__ == '__main__':
-    model_list = ['rv4']# capm, 'ff3', 'ff5', 'ch4', 'sr2', 'rv4']
+    country = 'us'
+    index = 'RAY'
+    model_list = ['hs']# capm, 'ff3', 'ff5', 'ch4', 'sr2', 'rv4']
     window_list = [[3, 12], [6, 12], [3, 36], [6, 36], [12, 36], [3, 60], [6, 60], [12, 60]]
     param = itertools.product(model_list, window_list)
     total = []
     for p in param:
-        c = calculate_Expected_Return('china', 'MXCN', *p)
+        c = calculate_Expected_Return(country, 'RAY', *p)
         total.append(c)
 
-    pd.concat(total, axis=1).to_csv('result_china_rv.csv')
+    pd.concat(total, axis=1).to_csv(f'result_{country}_rv.csv')

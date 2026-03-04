@@ -89,13 +89,17 @@ def calc_factor_index(country, index, factorlist):
     '''load weight'''
     factor_ts = []
     for factor in factorlist:
-        weight = pd.read_csv(f'./weight/{country}/factor_weight/{factor}.csv', index_col=0, parse_dates=True)
-        res = bt.run(run_bt(factor, weight, p, d, thresh=30))
-        res.prices.to_csv(f'./output/{country}/bm/{factor}.csv')
-        factor_ts.append(res.prices)
+        if factor == 'HS':
+            res = pd.read_csv(f'D:/Factor_DB/external_factor/{country}/hs_delta.csv', index_col=0, parse_dates=True)[['HS_Delta']]
+            res.columns = [factor]
+        else:
+            weight = pd.read_csv(f'./weight/{country}/factor_weight/{factor}.csv', index_col=0, parse_dates=True)
+            res = bt.run(run_bt(factor, weight, p, d, thresh=30)).prices
+        res.to_csv(f'./output/{country}/bm/{factor}.csv')
+        factor_ts.append(res)
 
     factor_ts = pd.concat(factor_ts, axis=1).ffill()
-    factor_ts.to_csv(f'output/0.export/{country}/factor_ts.csv')
+    factor_ts.to_csv(f'output/0.export/{country}/factor_hs.csv')
 
     return True
 
@@ -191,7 +195,7 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
     compname = dp.tag('name')
     industryname = pd.read_csv(f'./output/industry_map_gics.csv', dtype=str).set_index('Code')
 
-    ER['NAME'] = compname.loc[ER.index]
+    ER['Name'] = compname.loc[ER.index]
     ER['Vol'] = vol
     ER['Sharpe'] = ER.ER / ER.Vol
 
@@ -199,14 +203,14 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
 
     ER['mktval'] = mktval
     ER['mktvalER'] = ER['ER'] * ER['mktval']
-    ER['industry'] = industry.sector.str[:2]
-    ER['subindustry'] = industry.sector.str[:6]
+    ER['sector'] = industry.sector.str[:2]
+    ER['industry'] = industry.sector.str[:6]
 
     Beta = pd.read_csv(Beta_path, index_col=0, dtype=float, parse_dates=True)
     Beta = Beta.loc[ER.index]
     Beta['mktval'] = mktval
-    Beta['industry'] = industry.sector.str[:2]
-    Beta['subindustry'] = industry.sector.str[:6]
+    Beta['sector'] = industry.sector.str[:2]
+    Beta['industry'] = industry.sector.str[:6]
     # if country is korea, include reverse beta
     if country=='korea':
         betalist = ['intercept','beta_bm','beta_hml','beta_smb','beta_op','beta_inv','beta_mom','beta_sr']
@@ -221,14 +225,16 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
     size_ER = ER.groupby('size')['mktvalER'].sum() / ER.groupby('size')['mktval'].sum()
     size_mean_ER = ER.groupby('size')['ER'].mean()
     #calculate mktval weighted ER by industry group
-    industry_ER = ER.groupby('industry')['mktvalER'].sum() / ER.groupby('industry')['mktval'].sum()
-    industry_mean_ER = ER.groupby('industry')['ER'].mean()
-    industry_beta = Beta.groupby('industry')[betalist].mean()
+    industry_ER = ER.groupby('sector')['mktvalER'].sum() / ER.groupby('sector')['mktval'].sum()
+    industry_ER.name = 'wER'
+    industry_mean_ER = ER.groupby('sector')['ER'].mean()
+    industry_beta = Beta.groupby('sector')[betalist].mean()
     industry_name = industryname.loc[industry_ER.index, 'Sector']
 
-    subindustry_ER = ER.groupby('subindustry')['mktvalER'].sum() / ER.groupby('subindustry')['mktval'].sum()
-    subindustry_mean_ER = ER.groupby('subindustry')['ER'].mean()
-    subindustry_beta = Beta.groupby('subindustry')[betalist].mean()
+    subindustry_ER = ER.groupby('industry')['mktvalER'].sum() / ER.groupby('industry')['mktval'].sum()
+    subindustry_ER.name = 'wER'
+    subindustry_mean_ER = ER.groupby('industry')['ER'].mean()
+    subindustry_beta = Beta.groupby('industry')[betalist].mean()
     subindustry_name = industryname.loc[subindustry_ER.index, 'Sector']
 
     #calculate factor return
@@ -238,7 +244,7 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
         curr_weight = pd.read_csv(fpath, index_col=0, parse_dates=True).iloc[-1].dropna()
         ER[factor] = curr_weight
         factor_result.append([factor, (ER[factor] * ER['ER']).sum()])
-    factor_result = pd.DataFrame(factor_result, columns=['factor', 'factor_return'])
+    factor_ER = pd.DataFrame(factor_result, columns=['factor', 'ER'])
     ER = pd.concat([ER, Beta[betalist]], axis=1)
 
     tempER = ER.copy()
@@ -251,12 +257,12 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
     result_dict = {
         'total_ER': ER
         , 'beta': Beta
-        , 'wmean_ER': pd.DataFrame([weighted_ER, mean_ER], index=['wmean_ER', 'mean_ER'], columns=['Index Expected Return'])
+        , 'index_ER': pd.DataFrame([['index', weighted_ER, mean_ER]], columns=['index', 'wER', 'ER'])
         , 'size_ER': pd.concat([size_ER,size_mean_ER], axis=1)
-        , 'industry_ER': pd.concat([industry_name, industry_ER, industry_mean_ER, industry_beta], axis=1)
-        , 'subindustry_ER': pd.concat([subindustry_name, subindustry_ER, subindustry_mean_ER, subindustry_beta], axis=1)
-        , 'factor_result': factor_result
-        , 'ERtop+bot10': pd.concat([ERtop10, ERbot10], axis=0)[['industry', 'mktval','size', 'ER', 'Vol', 'Sharpe']]
+        , 'sector_ER': pd.concat([industry_name, industry_ER, industry_mean_ER, industry_beta], axis=1)
+        , 'industry_ER': pd.concat([subindustry_name, subindustry_ER, subindustry_mean_ER, subindustry_beta], axis=1)
+        , 'factor_ER': factor_ER
+        , 'ERtop+bot10': pd.concat([ERtop10, ERbot10], axis=0)[['Name', 'sector', 'mktval','size', 'ER', 'Vol', 'Sharpe']]
     }
 
     weight_path = f'./output/0.export/{country}'
@@ -303,26 +309,27 @@ if __name__ == '__main__':
     for country in country_list:
         calc_factor_index(*country, factorlist=['BM', 'HML', 'SMB', 'MOM', 'OP', 'INV', 'REV'])
 
-
     # 2. Calculate Expected Return
     print('Calculate Expected Return')
     model_list = [
         ['us', 'RAY', 'ch4', 3, 12, ['bm', 'hml','smb','mom','op','inv']],
         ['japan', 'TPX500', 'capm', 3, 60, ['bm', 'hml','smb','mom','op','inv']],
         ['europe', 'SXXP', 'capm', 6, 12, ['bm', 'hml','smb','mom','op','inv']],
-        ['korea', 'KRX300', 'sr2', 3, 60, ['bm', 'hml', 'smb', 'mom', 'op', 'inv']],
+        ['korea', 'KRX300', 'capm', 3, 60, ['bm', 'hml', 'smb', 'mom', 'op', 'inv']],
         ['china', 'MXCN', 'ff3', 12, 60, ['bm', 'hml', 'smb', 'mom', 'op', 'inv']],
         ]
 
     for country_model in model_list:
         snapdate = calculate_Expected_Return(*country_model, end=None, calc_all=True)
 
+    snapdate = '2026-01-30'
+
     print('Calculate Formatted Expected return')
     model_list = [
         [snapdate, 'us', 'ch4', 3, 12, 0.7],
         [snapdate, 'japan', 'capm', 3, 60, -1],
         [snapdate, 'europe', 'capm', 6, 12, -1],
-        [snapdate, 'korea', 'sr2', 3, 60, -1],
+        [snapdate, 'korea', 'capm', 3, 60, -1],
         [snapdate, 'china', 'ff3', 12, 60, -1],
         ]
     for country_model in model_list:

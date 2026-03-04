@@ -2,12 +2,12 @@
 load data 설계
 1. index 선택
 2. index별로 저장되어있는 index_master 불러오기
-    path=D:\Factor_DB\db\master_{index}.csv
+    path=D:/Factor_DB/db/master_{index}.csv
 3. index_master의 columns에 있는 종목별로 D:/Factor_DB/db에 저장된 종목별 데이터 불러오기
 4. 지정된 data를 불러오기 전, data_master를 통해 data 정의
-    path=D:\Factor_DB\data_master.json
+    path=D:/Factor_DB/data_master.json
 5. 종목별 data를 불러오기 전, equity_master를 통해 data의 존재 여부, 상태, 업데이트된 기간 확인
-    path=D:\Factor_DB\equity_master.json
+    path=D:/Factor_DB/equity_master.json
 6. 데이터 로드
 '''
 import configparser
@@ -21,6 +21,8 @@ import src.factorLib as flib
 import pandas as pd
 
 import duckdb
+
+from src.data_manager import MasterDataManager
 
 
 class BaseData:
@@ -41,9 +43,19 @@ class BaseData:
             print(f"File not found: {file_path}")
             return {}
 
+    @staticmethod
+    def load_db(file_path: str):
+        """
+        Utility method to load a database file.
+        """
+        if os.path.exists(file_path):
+            return MasterDataManager(file_path)
+        else:
+            raise FileNotFoundError('equity_master.db file not found')
+
     # Load JSON data only once
     data_master = load_json.__func__(f'{dbpath}/data_master.json')
-    equity_master = load_json.__func__(f'{dbpath}/equity_master.json')
+    equity_master = load_db.__func__(f'{dbpath}/equity_master.db')
 
 
 class Data:
@@ -157,7 +169,7 @@ class DataProcessor(BaseData):
         Load stocks from the provided instrument list.
         """
         for instrument in instruments:
-            stock_info = self.equity_master.get(instrument)
+            stock_info = self.equity_master.get_section(instrument)
             if stock_info:
                 self.stock[instrument] = Stock(instrument, stock_info)
             else:
@@ -325,7 +337,7 @@ class DataProcessor(BaseData):
              .to_parquet(f'{cache_path}/value.parquet'))
         elif data == 'size':
             (flib.size(
-                self.__cache_data__(cache_path, 'mktcap', start_m, end, data_freq)
+                self.__cache_data__(cache_path, 'amktcap', start_m, end, data_freq)
             )[start:end]
              .to_parquet(f'{cache_path}/size.parquet'))
         elif data == 'profitability':
@@ -552,7 +564,6 @@ if __name__ == '__main__':
     shutil.rmtree('./cache')
     dp.build_data('./cache', 'momentum', '2020-01-01', '2025-01-01')
     dp.build_data('./cache', 'aprice', '2020-01-01', '2025-01-01')
-    a = 1
 
     a=pd.date_range(start='2000-01-01', end='2025-02-28', freq='w-fri')
     # set a as monthly
