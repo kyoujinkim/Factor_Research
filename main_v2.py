@@ -291,7 +291,7 @@ if __name__ == '__main__':
 
     # 1. Calculate Factor Index
     ## 1-1. Calculate Factor Index Weight
-    print('Start Calculate Factor Index Weight')
+    '''print('Start Calculate Factor Index Weight')
     for country in country_list:
         calc_factor_weight(*country,
                            factorlist={'BM': 'amktcap'
@@ -303,7 +303,7 @@ if __name__ == '__main__':
                                , 'REV': 'reversal'
                                        }
                            )
-
+    '''
     ## 1-2. Calculate Factor Index
     print('Start Calculate Factor Index')
     for country in country_list:
