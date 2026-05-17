@@ -1,3 +1,4 @@
+import argparse
 import os
 import pickle
 import shutil
@@ -6,6 +7,7 @@ from glob import glob
 import bt
 import numpy as np
 import pandas as pd
+from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
 
 from src.loadData import DataProcessor
@@ -13,7 +15,7 @@ from src.calcWeight_2v import WeightBuilder
 from src.calcER_2v import Calculator
 from src.backtest import run_bt
 
-def calc_factor_weight(country, index, factorlist):
+def calc_factor_weight(country, index, factorlist, recalc_w=False):
 
     if not os.path.exists(f'./weight/{country}/factor_weight'):
         os.makedirs(f'./weight/{country}/factor_weight')
@@ -33,13 +35,20 @@ def calc_factor_weight(country, index, factorlist):
         data_list = ['amktcap', 'returns']
         data_list.append(factor)
 
+        if recalc_w:
+            w_prev = pd.DataFrame()
+            w_end = None
+        else:
+            w_prev = pd.read_csv(f'./weight/{country}/factor_weight/{key}.csv', index_col=0, parse_dates=True)
+            w_end = (w_prev.index[-1]-relativedelta(weeks=5)).strftime('%Y-%m-%d')
+
         # build data
         for data in tqdm(data_list):
-            dp.build_data(bpath, data, None, None)
+            dp.build_data(bpath, data, w_end, None)
 
         wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
         if key == 'BM':
-            w = wb.run(start=None
+            w = wb.run(start=w_end
                           , end=None
                           , weighting_method='mktcap'
                           , weight_limit=0.3
@@ -47,7 +56,7 @@ def calc_factor_weight(country, index, factorlist):
                           , workers=os.cpu_count()-3
                           , active_multiproc=True)
         else:
-            w = wb.run(start=None
+            w = wb.run(start=w_end
                        , end=None
                        , weighting_method='longshort'
                        , factor=factor
@@ -56,6 +65,7 @@ def calc_factor_weight(country, index, factorlist):
                        , workers=os.cpu_count()-3
                        , active_multiproc=True)
 
+        w = w_prev.combine_first(w)
         w.to_csv(f'./weight/{country}/factor_weight/{key}.csv')
 
     # initialize
@@ -273,6 +283,24 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
     for key, value in result_dict.items():
         value.to_csv(f'./output/0.export/{country}/{key}.csv')
 
+def run():
+    return None
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Factor Research")
+
+    # 2. Add arguments
+    parser.add_argument("--c", nargs='+', default=['us','europe','japan','korea','china'], help="The list of countries")  # Positional
+    parser.add_argument("--f", nargs='+', default=['BM', 'SMB', 'HML', 'MOM', 'OP', 'INV', 'REV'], help="The list of factors")  # Positional
+    parser.add_argument("--d", default=None, type=str, help="The date of snapshot")
+    parser.add_argument("--b", default='ME', type=str, choices=['ME','M'], help="Basis of frequency of calculation. If ME, the calculation is done based on month-end data. If M, the calculation is done based on monthly data.")
+
+    # 3. Parse and use
+    args = parser.parse_args()
+
+    return args
+
+
 start = None
 if __name__ == '__main__':
     country_list = [
@@ -291,7 +319,7 @@ if __name__ == '__main__':
 
     # 1. Calculate Factor Index
     ## 1-1. Calculate Factor Index Weight
-    '''print('Start Calculate Factor Index Weight')
+    print('Start Calculate Factor Index Weight')
     for country in country_list:
         calc_factor_weight(*country,
                            factorlist={'BM': 'amktcap'
@@ -303,7 +331,7 @@ if __name__ == '__main__':
                                , 'REV': 'reversal'
                                        }
                            )
-    '''
+
     ## 1-2. Calculate Factor Index
     print('Start Calculate Factor Index')
     for country in country_list:
@@ -322,7 +350,7 @@ if __name__ == '__main__':
     for country_model in model_list:
         snapdate = calculate_Expected_Return(*country_model, end=None, calc_all=True)
 
-    snapdate = '2026-01-30'
+    #snapdate = '2026-01-30'
 
     print('Calculate Formatted Expected return')
     model_list = [

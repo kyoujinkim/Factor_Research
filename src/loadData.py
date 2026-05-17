@@ -10,7 +10,6 @@ load data 설계
     path=D:/Factor_DB/equity_master.json
 6. 데이터 로드
 '''
-import configparser
 import inspect
 import os
 import json
