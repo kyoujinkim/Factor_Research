@@ -14,7 +14,7 @@ from src.data_manager import MasterDataManager
 
 
 class DataDownloader:
-    def __init__(self, app_key, id, pw, emas_path, dmas_path):
+    def __init__(self, app_key, id, pw, db_path, emas_name, dmas_name):
         self.app_key = app_key
         self.id = id
         self.pw = pw
@@ -22,8 +22,9 @@ class DataDownloader:
         rd.session.set_default(session)
         session.open()
         self.ds_session = dsws.DataClient(username=self.id, password=self.pw)
-        self.emas_path = emas_path
-        self.dmas_path = dmas_path
+        self.db_path = db_path
+        self.emas_path = db_path + '/' + emas_name
+        self.dmas_path = db_path + '/' + dmas_name
 
         # read equity master(dict file)
         self.load_equity_master()
@@ -56,8 +57,8 @@ class DataDownloader:
         :return: None, internal self's index_master is updated
         '''
         self.index = index
-        if exist and os.path.exists(f'./members/master_{index}.parquet'):
-            self.index_master = pd.read_parquet(f'./members/master_{index}.parquet', engine='pyarrow')
+        if exist and os.path.exists(f'{self.db_path}/members/master_{index}.parquet'):
+            self.index_master = pd.read_parquet(f'{self.db_path}/members/master_{index}.parquet', engine='pyarrow')
         else:
             self.index_master = self.build_index_master(index)
 
@@ -92,7 +93,7 @@ class DataDownloader:
         return isin_list, port_date
 
     def build_index_master(self, index):
-        list_memb = glob(f'./members/{index}/*.xlsx')
+        list_memb = glob(f'{self.db_path}/members/{index}/*.xlsx')
 
         total_df = []
 
@@ -102,7 +103,7 @@ class DataDownloader:
 
         index_master = pd.concat(total_df, axis=1).T.sort_index(ascending=True)
 
-        index_master.to_parquet(f'./members/master_{index}.parquet', engine='pyarrow', compression='snappy')
+        index_master.to_parquet(f'{self.db_path}/members/master_{index}.parquet', engine='pyarrow', compression='snappy')
 
         return index_master
 
@@ -169,13 +170,12 @@ class DataDownloader:
         else:
             return False
 
-    def process(self, prev_months, post_months, data, save_path='/db', currency='USD', currency_ds='U$', force_update=False):
+    def process(self, prev_months, post_months, data, currency='USD', currency_ds='U$', force_update=False):
         '''
         Run bulk data download
         :param prev_months: previous month to download for margin
         :param post_months: post month to download for margin
         :param data: which data to download
-        :param save_path: path to save data
         :param currency: currency to convert data, e.g. 'USD', 'EUR', 'JPY'
         :param currency_ds: currency for Datastream, e.g. 'U$', 'EU', 'Y'
         :return: Bool, if success, return True
@@ -220,7 +220,7 @@ class DataDownloader:
                 # if data is more than 100, download data seperately by 100 equities
                 step_size = 50
                 for i in range(0, len(tmp_df2), step_size):
-                    if os.path.exists(f'./db/bulk/{data}_{label}_{i}.csv'):
+                    if os.path.exists(f'{self.db_path}/db/bulk/{data}_{label}_{i}.csv'):
                         continue
                     tmp_df2_sub = tmp_df2.iloc[i:i + step_size].copy()
                     pbar.set_description(f'Downloading data: {data} - {label} - {i} to {i + 50} / {tmp_df2.equ.count()} equities')
@@ -261,7 +261,7 @@ class DataDownloader:
                         )
                     if type(rd_data) != pd.DataFrame:
                         rd_data = pd.DataFrame(columns=tmp_df2_sub.equ.to_list())
-                    rd_data.to_csv(f'.{save_path}/bulk/{self.index}_{data}_{label}_{i}.csv', encoding='utf-8-sig')
+                    rd_data.to_csv(f'{self.db_path}/db/bulk/{self.index}_{data}_{label}_{i}.csv', encoding='utf-8-sig')
 
                 pbar.update(1)
 

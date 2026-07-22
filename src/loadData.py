@@ -197,7 +197,8 @@ class DataProcessor(BaseData):
                 for s in self.stock.keys():
                    result.append([s, self.stock[s].info.get(data_key, None)])
 
-                return pd.DataFrame(result, columns=['instrument', data_key]).set_index('instrument')
+
+                return pd.DataFrame(result, columns=pd.Index(['instrument', data_key]), dtype=str).set_index('instrument')
             else:
                 raise ValueError(f"Data key '{data_key}' is not a tag.")
         else:

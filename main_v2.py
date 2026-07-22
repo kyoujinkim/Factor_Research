@@ -39,7 +39,7 @@ def calc_factor_weight(country, index, factorlist, recalc_w=False):
             w_prev = pd.DataFrame()
             w_end = None
         else:
-            w_prev = pd.read_csv(f'./weight/{country}/factor_weight/{key}.csv', index_col=0, parse_dates=True)
+            w_prev = pd.read_csv(f'./weight/{country}/factor_weight/{key}.csv', index_col=0, parse_dates=True).iloc[:-3]
             w_end = (w_prev.index[-1]-relativedelta(weeks=5)).strftime('%Y-%m-%d')
 
         # build data
@@ -303,11 +303,11 @@ def parse_args():
 
 start = None
 if __name__ == '__main__':
-    country_list = [
+    '''country_list = [
         ['us','RAY'],
         ['europe','SXXP'],
         ['japan','TPX500'],
-        ['korea','KRX300'],
+        ['korea','KRX500'],
         ['china', 'MXCN']
     ]
 
@@ -329,7 +329,8 @@ if __name__ == '__main__':
                                , 'OP': 'profitability'
                                , 'INV': 'investment'
                                , 'REV': 'reversal'
-                                       }
+                                       },
+                           recalc_w=False
                            )
 
     ## 1-2. Calculate Factor Index
@@ -348,9 +349,9 @@ if __name__ == '__main__':
         ]
 
     for country_model in model_list:
-        snapdate = calculate_Expected_Return(*country_model, end=None, calc_all=True)
+        snapdate = calculate_Expected_Return(*country_model, end=None, calc_all=True)'''
 
-    #snapdate = '2026-01-30'
+    snapdate = '2026-07-10'
 
     print('Calculate Formatted Expected return')
     model_list = [

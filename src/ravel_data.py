@@ -10,15 +10,16 @@ from src.data_manager import MasterDataManager
 
 
 class DataProcessor:
-    def __init__(self, emas_path, dmas_path, db_path):
-        self.data_master = json.load(open(dmas_path, 'r'))
-        self.equity_master_path = emas_path
+    def __init__(self, db_path, emas_name, dmas_name):
+        self.dmas_path = db_path + '/' + dmas_name
+        self.emas_path = db_path + '/' + emas_name
+        self.data_master = json.load(open(self.dmas_path, 'r'))
         self.db_path = db_path
         self.load_equity_master()
 
     def load_equity_master(self):
-        if os.path.exists(self.equity_master_path):
-            self.equity_master = MasterDataManager(self.equity_master_path)
+        if os.path.exists(self.emas_path):
+            self.equity_master = MasterDataManager(self.emas_path)
         else:
             raise FileNotFoundError('equity_master.db file not found')
 
@@ -50,7 +51,7 @@ class DataProcessor:
         return data_state
 
     @staticmethod
-    def dsws_column_reader(data, tmp, cls):
+    def dsws_column_reader(data, tmp):
         try:
             tmp = tmp.astype(float)
             tmp.name = data
@@ -72,7 +73,7 @@ class DataProcessor:
         return tmp
 
     def process(self, data, force_update=False):
-        data_bulks = glob(f'{self.db_path}/bulk/*{data}*.csv')
+        data_bulks = glob(f'{self.db_path}/db/bulk/*{data}*.csv')
 
         for data_path in tqdm(data_bulks, desc=f'Processing {data}'):
             data_master_src = self.data_master[data]['src']
@@ -94,7 +95,7 @@ class DataProcessor:
 
             for col in equ_list:
                 if data_master_src == 'dsws':
-                    tmprow = self.dsws_column_reader(data, data_bulk[col], data_master_cls)
+                    tmprow = self.dsws_column_reader(data, data_bulk[col])
                 else:
                     tmprow = self.rd_column_reader(data, data_bulk.loc[col], data_master_cls)
 
@@ -105,7 +106,7 @@ class DataProcessor:
                 data_state = self.save_tmp_row(col, data, start_date, end_date, frq, force_update=force_update)
 
                 if data_state == 1:
-                    prev_data = pd.read_parquet(f'{self.db_path}/{col}_{data}.parquet', engine="pyarrow")
+                    prev_data = pd.read_parquet(f'{self.db_path}/db/{col}_{data}.parquet', engine="pyarrow")
                     prev_data = prev_data.rename(columns={col:data})
                     tmprow = prev_data.combine_first(pd.DataFrame(tmprow))
                 elif data_state == 2:
@@ -114,7 +115,7 @@ class DataProcessor:
                     tmprow = pd.DataFrame(tmprow)
                 tmprow.index.name = 'date'
                 tmprow['instrument'] = col
-                tmprow.to_parquet(f'{self.db_path}/{col}_{data}.parquet', engine="pyarrow", compression="snappy")
+                tmprow.to_parquet(f'{self.db_path}/db/{col}_{data}.parquet', engine="pyarrow", compression="snappy")
 
             # after save all data, delete data bulk
             while os.path.exists(data_path):
