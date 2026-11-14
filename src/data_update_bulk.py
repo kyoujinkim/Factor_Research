@@ -84,8 +84,11 @@ class DataDownloader:
 
     @staticmethod
     def read_member_xl(file_path):
-        info = file_path.split('\\')[-1].split('.')[0][-12:-1]
-        port_date = dt.datetime.strptime(info, '%b %d %Y')
+        info = file_path.split('\\')[-1].split('.')[0].split('of ')[-1]
+        try:
+            port_date = dt.datetime.strptime(info, '%b %d %Y')
+        except:
+            port_date = dt.datetime.strptime(info[:-1], '%b %d %Y')
         # read xlsx
         memb_xl = pd.read_excel(file_path, engine='openpyxl')
         isin_list = memb_xl.filter(regex=('ISIN*')).iloc[:, 0].dropna().drop_duplicates()
@@ -220,7 +223,8 @@ class DataDownloader:
                 # if data is more than 100, download data seperately by 100 equities
                 step_size = 50
                 for i in range(0, len(tmp_df2), step_size):
-                    if os.path.exists(f'{self.db_path}/db/bulk/{data}_{label}_{i}.csv'):
+                    # same name as the file written below, so a restarted run skips chunks it already downloaded
+                    if os.path.exists(f'{self.db_path}/db/bulk/{self.index}_{data}_{label}_{i}.csv'):
                         continue
                     tmp_df2_sub = tmp_df2.iloc[i:i + step_size].copy()
                     pbar.set_description(f'Downloading data: {data} - {label} - {i} to {i + 50} / {tmp_df2.equ.count()} equities')

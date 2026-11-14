@@ -28,13 +28,10 @@ def investment(ts):
 def value(ts):
     '''
     Value 계산
-    B/P = 1 / PBR
-    :param pbr: PBR 데이터
-    :return: B/P
+    :param ts: B/P 데이터 (build_data가 'bp'를 넘긴다 — 이미 book/price이므로 뒤집지 않는다)
+    :return: B/P (클수록 value → longshort 상위 = long value)
     '''
-    bp = 1 / ts
-
-    return bp
+    return ts
 
 def size(ts):
     '''
