@@ -1,15 +1,26 @@
 import itertools
 import os
 import warnings
-from datetime import timedelta
 from typing import Dict
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
-from pandas._libs.tslibs.offsets import MonthEnd
 warnings.simplefilter(action='ignore', category=FutureWarning)
+
+# factor regressors of each model besides bm, in regression order (see Calculator._factor_model)
+MODEL_FACTORS = {
+    'capm': [],
+    'ff3': ['hml', 'smb'],
+    'ch4': ['hml', 'smb', 'mom'],
+    'rv4': ['hml', 'smb', 'rev'],
+    'ff5': ['hml', 'smb', 'op', 'inv'],
+    'ff6': ['hml', 'smb', 'op', 'inv', 'mom'],
+    'hs': ['hs'],
+}
+# factors used as given (not an index level turned into returns)
+RAW_FACTORS = {'hs'}
 
 class Calculator:
     '''
@@ -24,11 +35,15 @@ class Calculator:
             self.rf_bd = pd.DataFrame(0, index=price.index)
         else:
             # since rf is given as percentage
-            self.rf_bd = rf.fillna(method='ffill') / 100
+            self.rf_bd = rf.ffill() / 100
         if bm is None:
-            self.bm_bd = pd.DataFrame(np.ones(len(self.price.index)), index=self.price.index, columns=['bm'])
+            self.bm_bd = pd.DataFrame(np.ones(len(price.index)), index=price.index, columns=['bm'])
         else:
-            self.bm_bd = bm.fillna(method='ffill')
+            self.bm_bd = bm.ffill()
+
+    def __getstate__(self):
+        # workers of run() only need the resampled frames; skip the full weekly history when pickling
+        return {k: v for k, v in self.__dict__.items() if k not in ('price_bd', 'rf_bd', 'bm_bd')}
 
     def run(self, method:str, factors:Dict={}, resample:str='M', window:int=12, **kwargs) -> list:
         '''
@@ -72,13 +87,10 @@ class Calculator:
         else:
             bday = 252
 
-        #result = []
-        #for i in tqdm(range(basewindow+1, len(self.price))):
-        #    result.append(self._iterrun([method, bday, basewindow, window, i, False]))
         iterator = list(itertools.product([method], [bday], [basewindow], [window], range(basewindow+1, len(self.price)+1), [view_betas]))
-        #for i in iterator:
-        #    result = self._iterrun(i)
-        result = process_map(self._iterrun, iterator, max_workers=os.cpu_count()-2)
+        workers = os.cpu_count()-2
+        # every task pickles self, so hand each worker a batch of dates instead of one
+        result = process_map(self._iterrun, iterator, max_workers=workers, chunksize=max(1, len(iterator) // (workers * 4)))
 
         return result
 
@@ -123,35 +135,11 @@ class Calculator:
 
     @staticmethod
     def _check_factors(method, factor):
-        if method == 'capm':
-            if factor in ['bm']:
-                return True
-        elif method == 'ff3':
-            if factor in ['bm', 'hml', 'smb']:
-                return True
-        elif method == 'ff5':
-            if factor in ['bm', 'hml', 'smb', 'op', 'inv']:
-                return True
-        elif method == 'ff6':
-            if factor in ['bm', 'hml', 'smb', 'op', 'inv', 'mom']:
-                return True
-        elif method == 'ch4':
-            if factor in ['bm', 'hml', 'smb', 'mom']:
-                return True
-        elif method == 'rv4':
-            if factor in ['bm', 'hml', 'smb', 'rev']:
-                return True
-        elif method == 'sr2':
-            if factor in ['bm']:
-                return True
-        elif method == 'mean':
+        if method == 'mean':
             return True
-        elif method == 'hs':
-            if factor in ['bm', 'hs']:
-                return True
-
-        return False
-
+        if method == 'sr2':
+            return factor == 'bm'
+        return method in MODEL_FACTORS and factor in ['bm'] + MODEL_FACTORS[method]
 
     def _iterrun(self, var):
 
@@ -250,52 +238,16 @@ class Calculator:
 
         if method == 'mean':
             exp_rtn = self._historic_mean(price, rf, window, bday)
-        elif method == 'capm':
-            exp_rtn, betas = self._capm(price, rf, bm, window, bday)
-        elif method == 'ff3':
-            hml = factors.get('hml', None)
-            smb = factors.get('smb', None)
-            if hml is None or smb is None:
-                raise ValueError('HML and SMB should be given for FF-3F method')
-            exp_rtn, betas = self._ff3(price, rf, bm, hml, smb, window, bday)
-        elif method == 'ch4':
-            hml = factors.get('hml', None)
-            smb = factors.get('smb', None)
-            mom = factors.get('mom', None)
-            if hml is None or smb is None or mom is None:
-                raise ValueError('HML, SMB and MOM should be given for CH-4F method')
-            exp_rtn, betas = self._ch4(price, rf, bm, hml, smb, mom, window, bday)
-        elif method == 'rv4':
-            hml = factors.get('hml', None)
-            smb = factors.get('smb', None)
-            rev = factors.get('rev', None)
-            if hml is None or smb is None or rev is None:
-                raise ValueError('HML, SMB and REV should be given for RV-4F method')
-            exp_rtn, betas = self._rv4(price, rf, bm, hml, smb, rev, window, bday)
-        elif method == 'ff5':
-            hml = factors.get('hml', None)
-            smb = factors.get('smb', None)
-            op = factors.get('op', None)
-            inv = factors.get('inv', None)
-            if hml is None or smb is None or op is None or inv is None:
-                raise ValueError('HML, SMB, OP and INV should be given for FF-5F method')
-            exp_rtn, betas = self._ff5(price, rf, bm, hml, smb, op, inv, window, bday)
-        elif method == 'ff6':
-            hml = factors.get('hml', None)
-            smb = factors.get('smb', None)
-            op = factors.get('op', None)
-            inv = factors.get('inv', None)
-            mom = factors.get('mom', None)
-            if hml is None or smb is None or op is None or inv is None or mom is None:
-                raise ValueError('HML, SMB, OP, INV and MOM should be given for FF-6F method')
-            exp_rtn, betas = self._ff6(price, rf, bm, hml, smb, op, inv, mom, window, bday)
         elif method == 'sr2':
             exp_rtn, betas = self._sr2(price, rf, bm, window, bday)
-        elif method == 'hs':
-            hs = factors.get('hs', None)
-            if hs is None:
-                raise ValueError('HS should be given for HSDelta method')
-            exp_rtn, betas = self._hs(price, rf, bm, hs, window, bday)
+        elif method in MODEL_FACTORS:
+            names = MODEL_FACTORS[method]
+            missing = [f.upper() for f in names if factors.get(f) is None]
+            if missing:
+                raise ValueError(f'{", ".join(missing)} should be given for {method} method')
+            exp_rtn, betas = self._factor_model(price, rf, bm, factors, names, window, bday)
+        else:
+            raise ValueError(f'unknown method: {method}')
 
         exp_rtn = exp_rtn[exp_rtn != 0].dropna()
 
@@ -315,234 +267,33 @@ class Calculator:
         rf = (1+rf).iloc[-window:]**(1/bday)-1
         return (rtn - rf.values)[-self.avg_window:].mean(axis=0)
 
-    def _capm(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, window:int, bday:int):
+    def _factor_model(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, factors:Dict, names:list, window:int, bday:int):
         '''
-        CAPM을 이용한 기대수익률 계산. 과거 12~36개월 평균 시장 수익률 * beta를 통해 주가수익률을 예측할 수 있다는 가정
-        :param periods: 기대수익률을 계산할 기간
-        :return: dataframe of expected return
+        multi-factor 기대수익률: 초과수익률을 bm(-rf) + names 팩터 수익률에 회귀하고, 회귀계수 * 최근 avg_window 평균 팩터수익률을 합산
+        (CAPM, FF3, CH4, RV4, FF5, FF6, HS 공통; 모델별 팩터는 MODEL_FACTORS)
+        :param factors: factor name -> factor index level (RAW_FACTORS는 수익률로 바꾸지 않고 값 그대로 사용)
+        :param names: 회귀에 쓸 팩터 이름 (bm 제외, 순서 = 회귀변수 순서)
+        :return: (expected return, betas dataframe[intercept, beta_bm, beta_<name>...])
         '''
-        # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
+        # 1. 초과수익률 계산
         rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
         rf = (1+rf).iloc[-window:]**(1/bday)-1
         rtn_pure = rtn - rf.values
 
-        # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_bm_pure = rtn_bm - rf.values
+        # 2. bm 수익률(-rf) + 팩터 수익률
+        regs = {'bm': bm.pct_change(periods=1, fill_method=None).iloc[-window:] - rf.values}
+        for f in names:
+            regs[f] = factors[f].iloc[-window:] if f in RAW_FACTORS else factors[f].pct_change(periods=1, fill_method=None).iloc[-window:]
 
-        # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
-        # 4. multivariate beta 계산
-        betas = []
-        for col in rtn_pure:
-            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure)
-            betas.append(beta)
-        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm'])
-        expected_return = (betas_df.intercept
-                           + betas_df.beta_bm * rtn_bm_pure.iloc[-self.avg_window:].mean().values)
+        # 3. multivariate beta 계산
+        betas = [Calculator._getBeta(rtn_pure[col], *regs.values()) for col in rtn_pure]
+        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept'] + [f'beta_{f}' for f in regs])
 
-        # 6. 기대수익률 계산
-        return expected_return, betas_df
+        # 4. 기대수익률 = intercept + sum(beta * 평균 팩터수익률)
+        expected_return = betas_df.intercept
+        for f, r in regs.items():
+            expected_return = expected_return + betas_df[f'beta_{f}'] * r.iloc[-self.avg_window:].mean().values
 
-    def _ff3(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, hml:pd.DataFrame, smb:pd.DataFrame, window:int, bday:int):
-        '''
-        Fama-French 3 Factor Model을 이용한 기대수익률 계산
-        :param periods: 기대수익률을 계산할 기간
-        :return: dataframe of expected return
-        '''
-        # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rf = (1+rf).iloc[-window:]**(1/bday)-1
-        rtn_pure = rtn - rf.values
-
-        # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_bm_pure = rtn_bm - rf.values
-
-        # 3. hml, smb 수익률(-rf) 계산
-        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-window:]
-
-        # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
-        # 4. multivariate beta 계산
-        betas = []
-        for col in rtn_pure:
-            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml, rtn_smb)
-            betas.append(beta)
-        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb'])
-        expected_return = (betas_df.intercept
-                           + betas_df.beta_bm * rtn_bm_pure.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_hml * rtn_hml.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_smb * rtn_smb.iloc[-self.avg_window:].mean().values)
-
-        # 6. 기대수익률 계산
-        return expected_return, betas_df
-
-    def _ff5(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, hml:pd.DataFrame, smb:pd.DataFrame, op:pd.DataFrame, inv:pd.DataFrame, window:int, bday:int):
-        '''
-        Fama-French 5 Factor Model을 이용한 기대수익률 계산
-        :param price: price of equities
-        :param rf: risk free ratio
-        :param bm: benchmark price index
-        :param hml: high minus low factor return index
-        :param smb: small minus big factor return index
-        :param op: operating profitability factor return index
-        :param inv: investment factor return index
-        :param window: window size for expected return calculation
-        :param bday: business day count in a year
-        :return: expected return
-        '''
-        # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rf = (1+rf).iloc[-window:]**(1/bday)-1
-        rtn_pure = rtn - rf.values
-
-        # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_bm_pure = rtn_bm - rf.values
-
-        # 3. hml, smb 수익률(-rf) 계산
-        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_op = op.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_inv = inv.pct_change(periods=1, fill_method=None).iloc[-window:]
-
-        # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
-        # 4. multivariate beta 계산
-        betas = []
-        for col in rtn_pure:
-            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml, rtn_smb, rtn_op, rtn_inv)
-            betas.append(beta)
-        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb', 'beta_op', 'beta_inv'])
-        expected_return = (betas_df.intercept
-                           + betas_df.beta_bm * rtn_bm_pure.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_hml * rtn_hml.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_smb * rtn_smb.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_op * rtn_op.iloc[-self.avg_window:].mean().values
-                            + betas_df.beta_inv * rtn_inv.iloc[-self.avg_window:].mean().values)
-
-        # 6. 기대수익률 계산
-        return expected_return, betas_df
-
-    def _ch4(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, hml:pd.DataFrame, smb:pd.DataFrame, mom:pd.DataFrame, window:int, bday:int):
-        '''
-        Carhart 4 Factor Model을 이용한 기대수익률 계산
-        :param periods: 기대수익률을 계산할 기간
-        :return: dataframe of expected return
-        '''
-        # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rf = (1+rf).iloc[-window:]**(1/bday)-1
-        rtn_pure = rtn - rf.values
-
-        # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_bm_pure = rtn_bm - rf.values
-
-        # 3. hml, smb 수익률(-rf) 계산
-        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_mom = mom.pct_change(periods=1, fill_method=None).iloc[-window:]
-
-        # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
-        # 4. multivariate beta 계산
-        betas = []
-        for col in rtn_pure:
-            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml, rtn_smb, rtn_mom)
-            betas.append(beta)
-        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb', 'beta_mom'])
-        expected_return = (betas_df.intercept
-                           + betas_df.beta_bm * rtn_bm_pure.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_hml * rtn_hml.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_smb * rtn_smb.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_mom * rtn_mom.iloc[-self.avg_window:].mean().values)
-
-        # 6. 기대수익률 계산
-        return expected_return, betas_df
-
-    def _rv4(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, hml:pd.DataFrame, smb:pd.DataFrame, rev:pd.DataFrame, window:int, bday:int):
-        '''
-        Short-term reversal 4 Factor Model을 이용한 기대수익률 계산
-        :param periods: 기대수익률을 계산할 기간
-        :return: dataframe of expected return
-        '''
-        # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rf = (1+rf).iloc[-window:]**(1/bday)-1
-        rtn_pure = rtn - rf.values
-
-        # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_bm_pure = rtn_bm - rf.values
-
-        # 3. hml, smb 수익률(-rf) 계산
-        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_rev = rev.pct_change(periods=1, fill_method=None).iloc[-window:]
-
-        # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
-        # 4. multivariate beta 계산
-        betas = []
-        for col in rtn_pure:
-            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml, rtn_smb, rtn_rev)
-            betas.append(beta)
-        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb', 'beta_rev'])
-        expected_return = (betas_df.intercept
-                           + betas_df.beta_bm * rtn_bm_pure.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_hml * rtn_hml.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_smb * rtn_smb.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_rev * rtn_rev.iloc[-self.avg_window:].mean().values)
-
-        # 6. 기대수익률 계산
-        return expected_return, betas_df
-
-    def _ff6(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, hml:pd.DataFrame, smb:pd.DataFrame, op:pd.DataFrame, inv:pd.DataFrame, mom:pd.DataFrame, window:int, bday:int):
-        '''
-        Fama-French 6 Factor Model을 이용한 기대수익률 계산
-
-        :param price: price of equities
-        :param rf: risk free ratio
-        :param bm: bm index
-        :param hml: hml index
-        :param smb: smb index
-        :param op: operating profitability index
-        :param inv: investment index
-        :param mom: momentum index
-        :param window: window size for expected return calculation
-        :param bday: bday
-        :return: return
-        '''
-        # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rf = (1+rf).iloc[-window:]**(1/bday)-1
-        rtn_pure = rtn - rf.values
-
-        # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_bm_pure = rtn_bm - rf.values
-
-        # 3. hml, smb, op, inv, mom 수익률(-rf) 계산
-        rtn_hml = hml.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_smb = smb.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_op = op.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_inv = inv.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_mom = mom.pct_change(periods=1, fill_method=None).iloc[-window:]
-
-        # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
-        # 4. multivariate beta 계산
-        betas = []
-        for col in rtn_pure:
-            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hml, rtn_smb, rtn_op, rtn_inv, rtn_mom)
-            betas.append(beta)
-        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hml', 'beta_smb', 'beta_op', 'beta_inv', 'beta_mom'])
-        expected_return = (betas_df.intercept
-                           + betas_df.beta_bm * rtn_bm_pure.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_hml * rtn_hml.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_smb * rtn_smb.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_op * rtn_op.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_inv * rtn_inv.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_mom * rtn_mom.iloc[-self.avg_window:].mean().values)
-
-        # 6. 기대수익률 계산
         return expected_return, betas_df
 
     @staticmethod
@@ -644,38 +395,6 @@ class Calculator:
 
         # 6. 기대수익률 계산
         return result.ER_fit, betas_df
-
-    def _hs(self, price:pd.DataFrame, rf:pd.DataFrame, bm:pd.DataFrame, hs:pd.DataFrame, window:int, bday:int):
-        '''
-        HS-Delta를 이용한 기대수익률 계산
-        :param periods: 기대수익률을 계산할 기간
-        :return: dataframe of expected return
-        '''
-        # 1. 과거 12~36개월 평균 시장 수익률(-rf) 계산
-        rtn = price.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rf = (1+rf).iloc[-window:]**(1/bday)-1
-        rtn_pure = rtn - rf.values
-
-        # 2. bm 수익률(-rf) 계산
-        rtn_bm = bm.pct_change(periods=1, fill_method=None).iloc[-window:]
-        rtn_bm_pure = rtn_bm - rf.values
-
-        # 3. hs (원 값 사용) 계산
-        rtn_hs = hs.iloc[-window:]
-
-        # 기존 cov(x,y))/var(x)로는 계산이 어려우므로 행렬곱 방식으로 iteratively 계산
-        # 4. multivariate beta 계산
-        betas = []
-        for col in rtn_pure:
-            beta = Calculator._getBeta(rtn_pure[col], rtn_bm_pure, rtn_hs)
-            betas.append(beta)
-        betas_df = pd.DataFrame(betas, index=rtn_pure.columns, columns=['intercept', 'beta_bm', 'beta_hs'])
-        expected_return = (betas_df.intercept
-                           + betas_df.beta_bm * rtn_bm_pure.iloc[-self.avg_window:].mean().values
-                           + betas_df.beta_hs * rtn_hs.iloc[-self.avg_window:].mean().values)
-
-        # 6. 기대수익률 계산
-        return expected_return, betas_df
 
     @staticmethod
     def _msfe(actual, pred):

@@ -1,7 +1,6 @@
 import os
 import pickle
 import shutil
-from glob import glob
 
 import duckdb
 import numpy as np
@@ -47,11 +46,17 @@ class WeightBuilder:
         port_dates = pd.date_range(start=start, end=end, freq=self.data_freq)
         port_dates = pd.Series(port_dates, index=port_dates).resample(self.rebal_freq).last()
 
+        # share only the files __calc_weight__ looks up: {base_path}/{name}.parquet for returns, amktcap and the factor
+        base_path = kwargs.get('base_path', './cache')
+        needed = ['returns', 'amktcap'] + ([kwargs['factor']] if kwargs.get('factor') else [])
         data_key = {}
-        data_list = glob(f"{kwargs.get('base_path', './cache')}/*.parquet")
-        for data in data_list:
-            name = self.__save_memory__(data)
-            data_key[data] = name
+        shms = []
+        for name in needed:
+            path = f'{base_path}/{name}.parquet'
+            if os.path.exists(path):
+                shm = self.__save_memory__(path)
+                shms.append(shm)
+                data_key[name] = shm.name
 
         # set list of variable to process in parallel
         var = [
@@ -63,16 +68,16 @@ class WeightBuilder:
             }
             for pdate in port_dates]
 
-        if active_multiproc:
-            weights = process_map(WeightBuilder.__calc_weight__, var, max_workers=workers, desc=f"Calculating Weights : {kwargs.get('base_path').split('/')[-1]} - {kwargs.get('factor', None)}")
-        else:
-            weights = [WeightBuilder.__calc_weight__(v) for v in var]
-
-        # Close shared memory
-        for key in data_key.keys():
-            shm = SharedMemory(name=data_key[key])
-            shm.close()
-            shm.unlink()
+        try:
+            if active_multiproc:
+                weights = process_map(WeightBuilder.__calc_weight__, var, max_workers=workers, desc=f"Calculating Weights : {base_path.split('/')[-1]} - {kwargs.get('factor', None)}")
+            else:
+                weights = [WeightBuilder.__calc_weight__(v) for v in var]
+        finally:
+            # only the creating process frees the shared memory
+            for shm in shms:
+                shm.close()
+                shm.unlink()
 
         return pd.concat(weights,axis=0)
 
@@ -81,7 +86,6 @@ class WeightBuilder:
         datapk = pickle.dumps(datadf)
         # Create shared memory
         shm = SharedMemory(create=True, size=len(datapk))
-        setattr(self, path, shm)
 
         # Create a NumPy array from shared memory buffer
         buf_array = np.frombuffer(shm.buf, dtype=np.uint8)
@@ -92,25 +96,21 @@ class WeightBuilder:
 
         del buf_array
 
-        return shm.name
+        return shm
 
     @staticmethod
     def __load_memory__(name):
-        # Retrieve data from shared memory (for validation)
-        shm = SharedMemory(name=name)  # Attach to existing shared memory
-        datadfex = pickle.loads(shm.buf[:])
-        # Close shared memory
-        shm.close()# Corrected syntax
-        shm.unlink()
+        # attach, unpickle, detach (never unlink here: the creator frees it, see run). Unpickling on every lookup is
+        # ~1% of a full-history run; keeping a copy per worker would hold every frame in every worker instead.
+        shm = SharedMemory(name=name)
+        datadf = pickle.loads(shm.buf[:])
+        shm.close()
 
-        return datadfex
+        return datadf
 
     @staticmethod
     def __find_key__(data, data_key):
-        for key in data_key.keys():
-            if data in key:
-                return data_key[key]
-        return None
+        return data_key.get(data)
 
     @staticmethod
     def __calc_weight__(var):
@@ -128,7 +128,7 @@ class WeightBuilder:
         weight_limit = var.get('weight_limit', None)
 
         if len(code_list)>0:
-            code_list, _ = WeightBuilder.__filter_by_date__(code_list, data_key, 'return', pdate, 52)
+            code_list, _ = WeightBuilder.__filter_by_date__(code_list, data_key, 'returns', pdate, 52)
         if len(code_list)>0:
             code_list, mktcap_db = WeightBuilder.__filter_by__(code_list, data_key, 'amktcap', pdate, mktcap_n)
 
@@ -335,7 +335,7 @@ if __name__ == '__main__':
     index = 'RAY'
 
     # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    index_master = pd.read_parquet(f'{ld.BaseData.dbpath}/members/master_{index}.parquet', engine='pyarrow')
     dp.load_stocks(index_master.columns)
 
     bpath = './cache/us'
