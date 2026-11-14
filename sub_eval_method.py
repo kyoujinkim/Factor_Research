@@ -31,9 +31,10 @@ def calculate_Expected_Return(country, index, model, windows: List, end: str = N
 
     dp = DataProcessor()
     dp.turnon_cache()
+    dp.set_raw_store()
 
     # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+    index_master = pd.read_parquet(f'{DataProcessor.dbpath}/members/master_{index}.parquet', engine='pyarrow')
     dp.load_stocks(index_master.columns)
 
     for data in tqdm(['zprice']):
@@ -41,7 +42,7 @@ def calculate_Expected_Return(country, index, model, windows: List, end: str = N
 
     # load price
     p = pd.read_parquet(f'./cache/{country}/zprice.parquet', engine='pyarrow')
-    rf = pd.read_excel(f'D:/Factor_DB/rf.xlsx', sheet_name='rf', index_col=0, parse_dates=True)[[country]].iloc[1:].astype(float)
+    rf = pd.read_excel(f'{DataProcessor.dbpath}/rf.xlsx', sheet_name='rf', index_col=0, parse_dates=True)[[country]].iloc[1:].astype(float)
     rf.index = pd.to_datetime(rf.index)
 
     # load factor data
