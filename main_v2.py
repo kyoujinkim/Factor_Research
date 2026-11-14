@@ -1,19 +1,33 @@
 import argparse
 import os
 import pickle
-import shutil
-from glob import glob
+import time
 
-import bt
 import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
 
+import config
 from src.loadData import DataProcessor
 from src.calcWeight_2v import WeightBuilder
 from src.calcER_2v import Calculator
-from src.backtest import run_bt
+from src.backtest import plan_factor_index, run_factor_index
+
+
+def _open_dp(index=None, stocks=None):
+    '''DataProcessor with cache + raw store on, loaded with the members of index (or the given stocks)'''
+    dp = DataProcessor()
+    dp.turnon_cache()
+    dp.set_raw_store()
+    index_master = None
+    if index is not None:
+        # index별로 저장되어있는 index_master 불러오기
+        index_master = pd.read_parquet(f'{DataProcessor.dbpath}/members/master_{index}.parquet', engine='pyarrow')
+        stocks = index_master.columns
+    dp.load_stocks(stocks)
+    return dp, index_master
+
 
 def calc_factor_weight(country, index, factorlist, recalc_w=False):
 
@@ -22,12 +36,7 @@ def calc_factor_weight(country, index, factorlist, recalc_w=False):
 
     bpath = f'./cache/{country}'
 
-    dp = DataProcessor()
-    dp.turnon_cache()
-
-    # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
-    dp.load_stocks(index_master.columns)
+    dp, index_master = _open_dp(index)
 
     for key in factorlist.keys():
 
@@ -39,12 +48,16 @@ def calc_factor_weight(country, index, factorlist, recalc_w=False):
             w_prev = pd.DataFrame()
             w_end = None
         else:
-            w_prev = pd.read_csv(f'./weight/{country}/factor_weight/{key}.csv', index_col=0, parse_dates=True).iloc[:-3]
+            w_prev = pd.read_csv(f'./weight/{country}/factor_weight/{key}.csv', index_col=0, parse_dates=True).iloc[:-24]
             w_end = (w_prev.index[-1]-relativedelta(weeks=5)).strftime('%Y-%m-%d')
 
         # build data
         for data in tqdm(data_list):
             dp.build_data(bpath, data, w_end, None)
+        # the weights read the parquet files just written; free the in-memory intermediates (GBs for a full history)
+        # before the workers start
+        dp.turnoff_cache()
+        dp.turnon_cache()
 
         wb = WeightBuilder(index_master, rebal_freq='m', data_freq='W-FRI')
         if key == 'BM':
@@ -74,41 +87,60 @@ def calc_factor_weight(country, index, factorlist, recalc_w=False):
 
     return True
 
-def calc_factor_index(country, index, factorlist):
+def calc_factor_index(country, index, factorlist, full=False):
+    '''
+    factor index = backtest of the factor weights. Only the tail from the first new/changed rebalance date is
+    backtested and spliced onto the saved series (see src/backtest.py). full=True rebuilds everything, e.g. after
+    re-downloading a stock's price/dividend history.
+    '''
 
     if not os.path.exists(f'./output/{country}/bm'):
         os.makedirs(f'./output/{country}/bm')
 
     bpath = f'./cache/{country}'
 
-    dp = DataProcessor()
-    dp.turnon_cache()
+    dp, index_master = _open_dp(index)
 
-    # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
-    dp.load_stocks(index_master.columns)
-
-    for data in tqdm(['zprice','zdps']):
-        dp.build_data(bpath, data, None, None)
-
-    # load price
+    # load price (full history: it is also the ER stage's input)
+    dp.build_data(bpath, 'zprice', None, None)
     p = pd.read_parquet(f'{bpath}/zprice.parquet', engine='pyarrow')
-    # load div
-    d = pd.read_parquet(f'{bpath}/zdps.parquet', engine='pyarrow')
 
-    '''load weight'''
+    '''load weight, decide where each factor's backtest restarts'''
+    weights, plans = {}, {}
+    for factor in factorlist:
+        if factor != 'HS':
+            weights[factor] = pd.read_csv(f'./weight/{country}/factor_weight/{factor}.csv', index_col=0, parse_dates=True)
+            plans[factor] = plan_factor_index(weights[factor], p.columns, f'./output/{country}/bm/{factor}.csv', thresh=30, full=full)
+
+    # load div: only from the earliest restart when every factor runs incrementally
+    restarts = [pl['restart'] for pl in plans.values()]
+    zstart = min(restarts).strftime('%Y-%m-%d') if restarts and all(r is not None for r in restarts) else None
+    dp.build_data(bpath, 'zdps', zstart, None)
+    d = pd.read_parquet(f'{bpath}/zdps.parquet', engine='pyarrow')
+    if not set(p.columns) <= set(d.columns):
+        # the weight hashes assume every price column has coupons; otherwise rebuild everything
+        dp.build_data(bpath, 'zdps', None, None)
+        d = pd.read_parquet(f'{bpath}/zdps.parquet', engine='pyarrow')
+        plans = {f: plan_factor_index(weights[f], p.columns, f'./output/{country}/bm/{f}.csv', thresh=30, full=True) for f in plans}
+
     factor_ts = []
     for factor in factorlist:
         if factor == 'HS':
-            res = pd.read_csv(f'D:/Factor_DB/external_factor/{country}/hs_delta.csv', index_col=0, parse_dates=True)[['HS_Delta']]
+            res = pd.read_csv(f'{DataProcessor.dbpath}/external_factor/{country}/hs_delta.csv', index_col=0, parse_dates=True)[['HS_Delta']]
             res.columns = [factor]
+            res.to_csv(f'./output/{country}/bm/{factor}.csv')
         else:
-            weight = pd.read_csv(f'./weight/{country}/factor_weight/{factor}.csv', index_col=0, parse_dates=True)
-            res = bt.run(run_bt(factor, weight, p, d, thresh=30)).prices
-        res.to_csv(f'./output/{country}/bm/{factor}.csv')
+            weight = weights[factor]
+            out_csv = f'./output/{country}/bm/{factor}.csv'
+            plan = plans[factor]
+            t = time.perf_counter()
+            res = run_factor_index(factor, weight, p, d, out_csv, plan, thresh=30)
+            print(f'[factor index] {country} {factor}: {"incremental" if plan["restart"] is not None else "full"} '
+                  f'({plan["reason"]}) {time.perf_counter()-t:.0f}s')
         factor_ts.append(res)
 
     factor_ts = pd.concat(factor_ts, axis=1).ffill()
+    os.makedirs(f'output/0.export/{country}', exist_ok=True)
     factor_ts.to_csv(f'output/0.export/{country}/factor_hs.csv')
 
     return True
@@ -135,19 +167,14 @@ def calculate_Expected_Return(country, index, model, avg_window, window, factors
     basewindow = window+2  # 넉넉하게 부여
     print(f'country: {country}')
 
-    dp = DataProcessor()
-    dp.turnon_cache()
-
-    # 2. index별로 저장되어있는 index_master 불러오기
-    index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
-    dp.load_stocks(index_master.columns)
+    dp, index_master = _open_dp(index)
 
     for data in tqdm(['zprice']):
         dp.build_data(f'./cache/{country}', data, None, None)
 
     # load price
     p = pd.read_parquet(f'./cache/{country}/zprice.parquet', engine='pyarrow')
-    rf = pd.read_excel(f'D:/Factor_DB/rf.xlsx', sheet_name='rf', index_col=0, parse_dates=True)[[country]].iloc[1:].astype(float)
+    rf = pd.read_excel(f'{DataProcessor.dbpath}/rf.xlsx', sheet_name='rf', index_col=0, parse_dates=True)[[country]].iloc[1:].astype(float)
     rf.index = pd.to_datetime(rf.index)
     bm = pd.read_csv(f'./output/{country}/bm/BM.csv', dtype=float, index_col=0, parse_dates=True)
 
@@ -192,11 +219,7 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
     ER.columns = ['ER']
     ER = ER.sort_values('ER', ascending=False)#[5:-5]
 
-    dp = DataProcessor()
-    dp.turnon_cache()
-
-    # 2. index별로 저장되어있는 index_master 불러오기
-    dp.load_stocks(ER.index)
+    dp, _ = _open_dp(stocks=ER.index)
 
     mktval = dp.data('amktcap', end=snapdate).iloc[-1]
     vol = dp.data('returns', end=snapdate).iloc[-52:].std() * np.sqrt(4)
@@ -283,83 +306,43 @@ def groupER(snapdate, country, model, avg_window, lr_window, mktpct=0.7, factors
     for key, value in result_dict.items():
         value.to_csv(f'./output/0.export/{country}/{key}.csv')
 
-def run():
-    return None
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Factor Research")
-
-    # 2. Add arguments
-    parser.add_argument("--c", nargs='+', default=['us','europe','japan','korea','china'], help="The list of countries")  # Positional
-    parser.add_argument("--f", nargs='+', default=['BM', 'SMB', 'HML', 'MOM', 'OP', 'INV', 'REV'], help="The list of factors")  # Positional
-    parser.add_argument("--d", default=None, type=str, help="The date of snapshot")
-    parser.add_argument("--b", default='ME', type=str, choices=['ME','M'], help="Basis of frequency of calculation. If ME, the calculation is done based on month-end data. If M, the calculation is done based on monthly data.")
-
-    # 3. Parse and use
-    args = parser.parse_args()
-
-    return args
+    parser.add_argument("--c", nargs='+', default=list(config.MARKETS), choices=list(config.MARKETS), help="countries to run")
+    parser.add_argument("--f", nargs='+', default=list(config.FACTOR_SCORES), choices=list(config.FACTOR_SCORES), help="factors whose weights/indices are rebuilt")
+    parser.add_argument("--d", default=None, type=str, help="snapshot end date of the expected return (default: latest)")
+    parser.add_argument("--recalc-weight", action='store_true', help="rebuild the factor weights from the start instead of the last 24 rows")
+    parser.add_argument("--rebuild-index", action='store_true', help="backtest the factor indices from the start (after repairing a stock's price/dividend history)")
+    parser.add_argument("--skip-er-history", action='store_true', help="only the ER snapshot, not the full ER time series (.pkl)")
+    return parser.parse_args()
 
 
-start = None
 if __name__ == '__main__':
-    '''country_list = [
-        ['us','RAY'],
-        ['europe','SXXP'],
-        ['japan','TPX500'],
-        ['korea','KRX500'],
-        ['china', 'MXCN']
-    ]
-
-    # initialize data
-    for country, index in country_list:
-        bpath = f'./cache/{country}'
-        shutil.rmtree(bpath, ignore_errors=True)
-        os.makedirs(bpath, exist_ok=True)
+    args = parse_args()
+    markets = {c: config.MARKETS[c] for c in args.c}
 
     # 1. Calculate Factor Index
     ## 1-1. Calculate Factor Index Weight
     print('Start Calculate Factor Index Weight')
-    for country in country_list:
-        calc_factor_weight(*country,
-                           factorlist={'BM': 'amktcap'
-                               , 'SMB': 'size'
-                               , 'HML': 'value'
-                               , 'MOM': 'momentum'
-                               , 'OP': 'profitability'
-                               , 'INV': 'investment'
-                               , 'REV': 'reversal'
-                                       },
-                           recalc_w=False
-                           )
+    for country, m in markets.items():
+        calc_factor_weight(country, m['index'],
+                           factorlist={f: config.FACTOR_SCORES[f] for f in args.f},
+                           recalc_w=args.recalc_weight)
 
     ## 1-2. Calculate Factor Index
+    # The factor index is recomputed only from the first new/changed rebalance date (see calc_factor_index).
+    # Every factor is listed so factor_hs.csv stays complete; unchanged ones are skipped by their saved state.
     print('Start Calculate Factor Index')
-    for country in country_list:
-        calc_factor_index(*country, factorlist=['BM', 'HML', 'SMB', 'MOM', 'OP', 'INV', 'REV'])
+    for country, m in markets.items():
+        calc_factor_index(country, m['index'], factorlist=list(config.FACTOR_SCORES), full=args.rebuild_index)
 
     # 2. Calculate Expected Return
     print('Calculate Expected Return')
-    model_list = [
-        ['us', 'RAY', 'ch4', 3, 12, ['bm', 'hml','smb','mom','op','inv']],
-        ['japan', 'TPX500', 'capm', 3, 60, ['bm', 'hml','smb','mom','op','inv']],
-        ['europe', 'SXXP', 'capm', 6, 12, ['bm', 'hml','smb','mom','op','inv']],
-        ['korea', 'KRX300', 'capm', 3, 60, ['bm', 'hml', 'smb', 'mom', 'op', 'inv']],
-        ['china', 'MXCN', 'ff3', 12, 60, ['bm', 'hml', 'smb', 'mom', 'op', 'inv']],
-        ]
-
-    for country_model in model_list:
-        snapdate = calculate_Expected_Return(*country_model, end=None, calc_all=True)'''
-
-    snapdate = '2026-07-10'
+    snapdates = {}
+    for country, m in markets.items():
+        snapdates[country] = calculate_Expected_Return(country, m['index'], m['model'], m['avg_window'], m['window'],
+                                                       config.ER_FACTORS, end=args.d, calc_all=not args.skip_er_history)
 
     print('Calculate Formatted Expected return')
-    model_list = [
-        [snapdate, 'us', 'ch4', 3, 12, 0.7],
-        [snapdate, 'japan', 'capm', 3, 60, -1],
-        [snapdate, 'europe', 'capm', 6, 12, -1],
-        [snapdate, 'korea', 'capm', 3, 60, -1],
-        [snapdate, 'china', 'ff3', 12, 60, -1],
-        ]
-    for country_model in model_list:
-        groupER(*country_model, factors=['BM', 'HML', 'INV', 'MOM', 'OP', 'SMB'])
+    for country, m in markets.items():
+        groupER(snapdates[country], country, m['model'], m['avg_window'], m['window'], m['mktpct'], factors=config.EXPORT_FACTORS)
