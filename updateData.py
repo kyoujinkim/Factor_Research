@@ -1,14 +1,15 @@
 from configparser import ConfigParser
 
+import config
 from src.data_update_bulk import DataDownloader
-from src.ravel_data import DataProcessor
+from src.ravel_data import RawDataWriter
 
 # Load App Key from config file
-config = ConfigParser()
-config.read('D:/config.ini')
-app_key = config['main']['api_key']
-id = config['dsws']['id']
-pw = config['dsws']['pw']
+ini = ConfigParser()
+ini.read(config.CONFIG_INI)
+app_key = ini['main']['api_key']
+id = ini['dsws']['id']
+pw = ini['dsws']['pw']
 
 taglist = ['name', 'sector', 'issuename', 'country', 'currency', 'pcurrency']
 datalist = ['closeprice', 'returns', 'fyshares', 'mktcap', 'dividend', 'earnings', 'bookvalue', 'totalassets', 'freefloatpct']
@@ -16,23 +17,18 @@ datalist = ['closeprice', 'returns', 'fyshares', 'mktcap', 'dividend', 'earnings
 prev_months = 12 * 5 + 3
 post_months = 3
 
-dD = DataDownloader(app_key, id, pw, 'D:/Factor_DB', 'equity_master.db', 'data_master.json')
-dP = DataProcessor('D:/Factor_DB', 'equity_master.db', 'data_master.json')
+dD = DataDownloader(app_key, id, pw, config.DB_PATH, 'equity_master.db', 'data_master.json')
+dP = RawDataWriter(config.DB_PATH, 'equity_master.db', 'data_master.json')
 job = 'Done'
 
-for index, curr, curr_ds in [
-              ['RAY','USD', 'U$'],
-              ['SXXP', 'EUR', 'E'],
-              ['TPX500', 'JPY', 'Y'],
-              ['KRX500', 'KRW', 'KW'],
-              ['MXCN', 'CNY', 'CH']
-              ]:
+for m in config.MARKETS.values():
+    index, curr, curr_ds = m['index'], m['currency'], m['currency_ds']
 
     dD.assign_index(index, exist=False)
     print(dD.index)
 
     for tag in taglist:
-        job = dD.process_tag(tag, force_update=True)
+        job = dD.process_tag(tag, force_update=False)
         print(f'{tag} done {job}')
 
     for data in datalist:
