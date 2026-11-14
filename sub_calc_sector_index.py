@@ -24,9 +24,10 @@ if __name__ == '__main__':
 
         dp = DataProcessor()
         dp.turnon_cache()
+        dp.set_raw_store()
 
         # 2. index별로 저장되어있는 index_master 불러오기
-        index_master = pd.read_parquet(f'D:/Factor_DB/members/master_{index}.parquet', engine='pyarrow')
+        index_master = pd.read_parquet(f'{DataProcessor.dbpath}/members/master_{index}.parquet', engine='pyarrow')
         dp.load_stocks(index_master.columns)
 
         industry = dp.tag('sector')
