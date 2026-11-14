@@ -7,15 +7,19 @@ from tqdm import tqdm
 from time import sleep
 
 from src.data_manager import MasterDataManager
+from src.rawstore import RawStore
 
 
-class DataProcessor:
-    def __init__(self, db_path, emas_name, dmas_name):
+class RawDataWriter:
+    '''writes the downloaded bulk data into per-stock files (reading side: src/loadData.DataProcessor)'''
+    def __init__(self, db_path, emas_name, dmas_name, raw_store=True):
         self.dmas_path = db_path + '/' + dmas_name
         self.emas_path = db_path + '/' + emas_name
         self.data_master = json.load(open(self.dmas_path, 'r'))
         self.db_path = db_path
         self.load_equity_master()
+        # consolidated copy of the per-stock files that loadData reads (see src/rawstore.py); the per-stock files stay the source
+        self.raw_store = RawStore(f'{db_path}/derived', f'{db_path}/db') if raw_store else None
 
     def load_equity_master(self):
         if os.path.exists(self.emas_path):
@@ -74,6 +78,7 @@ class DataProcessor:
 
     def process(self, data, force_update=False):
         data_bulks = glob(f'{self.db_path}/db/bulk/*{data}*.csv')
+        written = {}    # instrument -> (frame written to its stock file, [mtime_ns, size]); mirrored into the raw store afterwards
 
         for data_path in tqdm(data_bulks, desc=f'Processing {data}'):
             data_master_src = self.data_master[data]['src']
@@ -117,6 +122,13 @@ class DataProcessor:
                 tmprow['instrument'] = col
                 tmprow.to_parquet(f'{self.db_path}/db/{col}_{data}.parquet', engine="pyarrow", compression="snappy")
 
+                if self.raw_store is not None:
+                    try:
+                        st = os.stat(f'{self.db_path}/db/{col}_{data}.parquet')
+                        written[col] = (tmprow, [st.st_mtime_ns, st.st_size])
+                    except OSError:
+                        pass
+
             # after save all data, delete data bulk
             while os.path.exists(data_path):
                 try:
@@ -124,11 +136,18 @@ class DataProcessor:
                 except:
                     sleep(1)
 
+        if written:
+            # never let the store break ingestion: the stock files are the source and the next read repairs the store
+            try:
+                self.raw_store.upsert(data.lower(), written)
+            except Exception as e:
+                print(f'[RawStore] {data}: not updated ({type(e).__name__}: {e}); it is repaired on the next read')
+
         self.equity_master.commit(force=True)
         return True
 
 
 if __name__ == '__main__':
     datalist = ['earnings', 'closeprice', 'return', 'fyshares', 'dividend', 'bookvalue', 'totalassets']
-    processor = DataProcessor('./data_master.json', './equity_master.json', './db/bulk')
+    processor = RawDataWriter('./data_master.json', './equity_master.json', './db/bulk')
     processor.process(datalist)
